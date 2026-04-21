@@ -1,16 +1,19 @@
 import json
 import hashlib
+import os
 import re
 from pathlib import Path
+
 import faiss
-import numpy as np
 from sentence_transformers import SentenceTransformer
 
 
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "data" / "rag_cache"
 
-RAG_DOCS_DIR = Path(r"D:\HND NIBM\PetChat-2.0\cleaned_txt")
+DEFAULT_RAG_DOCS_DIR = APP_DIR / "cleaned_txt"
+RAG_DOCS_DIR = Path(os.getenv("RAG_DOCS_DIR", str(DEFAULT_RAG_DOCS_DIR)))
+
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
 CHUNK_SIZE = 900
@@ -63,6 +66,10 @@ class LocalRAG:
         if self._can_use_cache():
             self._load_cache()
         else:
+            if not self._docs_available():
+                raise FileNotFoundError(
+                    f"RAG docs folder not found or empty: {self.docs_dir}"
+                )
             self._build_index()
             self._save_cache()
 
@@ -110,6 +117,9 @@ class LocalRAG:
 
         return chunks
 
+    def _docs_available(self) -> bool:
+        return self.docs_dir.exists() and any(self.docs_dir.glob("*.txt"))
+
     def _get_doc_state(self):
         if not self.docs_dir.exists():
             raise FileNotFoundError(f"RAG docs folder not found: {self.docs_dir}")
@@ -137,18 +147,35 @@ class LocalRAG:
             "docs": docs,
         }
 
+    def _cache_files_exist(self) -> bool:
+        return INDEX_FILE.exists() and META_FILE.exists() and STATE_FILE.exists()
+
     def _can_use_cache(self):
-        if not INDEX_FILE.exists() or not META_FILE.exists() or not STATE_FILE.exists():
+        if not self._cache_files_exist():
             return False
 
         try:
-            current_state = self._get_doc_state()
             saved_state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            return current_state == saved_state
         except Exception:
             return False
 
+        if self._docs_available():
+            try:
+                current_state = self._get_doc_state()
+                return current_state == saved_state
+            except Exception:
+                return False
+
+        return (
+            saved_state.get("embed_model") == EMBED_MODEL_NAME
+            and saved_state.get("chunk_size") == CHUNK_SIZE
+            and saved_state.get("chunk_overlap") == CHUNK_OVERLAP
+        )
+
     def _build_index(self):
+        if not self._docs_available():
+            raise FileNotFoundError(f"RAG docs folder not found or empty: {self.docs_dir}")
+
         txt_files = sorted(self.docs_dir.glob("*.txt"))
 
         all_chunks = []
@@ -186,6 +213,9 @@ class LocalRAG:
         self.metadata = all_meta
 
     def _save_cache(self):
+        if self.index is None:
+            raise ValueError("RAG index is missing and cannot be cached.")
+
         faiss.write_index(self.index, str(INDEX_FILE))
 
         payload = {
@@ -194,13 +224,13 @@ class LocalRAG:
         }
         META_FILE.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
         state = self._get_doc_state()
         STATE_FILE.write_text(
             json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
     def _load_cache(self):
@@ -210,8 +240,14 @@ class LocalRAG:
         self.chunks = payload.get("chunks", [])
         self.metadata = payload.get("metadata", [])
 
-        if self.index is None or not self.chunks:
+        if self.index is None or not self.chunks or not self.metadata:
             raise ValueError("Cached RAG data is invalid.")
+
+        if len(self.chunks) != len(self.metadata):
+            raise ValueError("Cached RAG chunks and metadata are out of sync.")
+
+        if self.index.ntotal != len(self.chunks):
+            raise ValueError("Cached FAISS index size does not match cached chunks.")
 
     def _detect_query_tags(self, query: str):
         q = query.lower()
@@ -309,50 +345,58 @@ class LocalRAG:
 
 
 _RAG_INSTANCE = None
+_RAG_ERROR = None
 
 
 def get_rag():
-    global _RAG_INSTANCE
+    global _RAG_INSTANCE, _RAG_ERROR
+    if _RAG_INSTANCE is None and _RAG_ERROR is None:
+        try:
+            _RAG_INSTANCE = LocalRAG(RAG_DOCS_DIR)
+        except Exception as e:
+            _RAG_ERROR = e
+
     if _RAG_INSTANCE is None:
-        _RAG_INSTANCE = LocalRAG(RAG_DOCS_DIR)
+        raise RuntimeError(f"RAG unavailable: {_RAG_ERROR}")
+
     return _RAG_INSTANCE
 
 
 def build_rag_context(query: str) -> str:
-    rag = get_rag()
-    hits = rag.search(query, top_k=TOP_K)
+    try:
+        rag = get_rag()
+        hits = rag.search(query, top_k=TOP_K)
+    except Exception:
+        return ""
 
     if not hits:
         return ""
 
     blocks = []
-    used_sources = []
 
-    for i, hit in enumerate(hits, start=1):
-        source = hit["source"]
+    for hit in hits:
         chunk_text = hit["text"].strip()
-        score = hit.get("final_score", hit["score"])
-
         if not chunk_text:
             continue
 
-        if source not in used_sources:
-            used_sources.append(source)
-
         blocks.append(
-            f"[Source {i}: {source} | score={score:.3f}]\n{chunk_text}"
+            "Background reference — use only for helpful ideas, not for tone or wording:\n"
+            f"{chunk_text}"
         )
 
     if not blocks:
         return ""
 
-    sources_line = "Sources used: " + ", ".join(used_sources)
-    return sources_line + "\n\n" + "\n\n".join(blocks)
+    return "\n\n---\n\n".join(blocks)
 
 
 def debug_search(query: str):
-    rag = get_rag()
-    hits = rag.search(query, top_k=TOP_K)
+    try:
+        rag = get_rag()
+        hits = rag.search(query, top_k=TOP_K)
+    except Exception:
+        return []
+
     if not hits:
         return []
 

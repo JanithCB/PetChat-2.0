@@ -1,8 +1,18 @@
 import os
 import sys
 import json
+import re
 import hashlib
 from pathlib import Path
+
+from prompts import (
+    SYSTEM_PROMPT,
+    MAX_HISTORY_TURNS,
+    build_user_message,
+    build_rewrite_prompt,
+)
+from safety import detect_risk_level, build_safety_reply
+from esc_support import build_esc_support_plan
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import QFont, QTextCursor, QTextOption
@@ -33,7 +43,6 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 USERS_FILE = DATA_DIR / "users.json"
 
-MAX_HISTORY_TURNS = 8
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
@@ -69,18 +78,14 @@ def resolve_api_key(input_key):
 
 def normalize_error_text(error_text):
     if not error_text:
-        return "Unknown error"
+        return "Something went wrong."
 
     lowered = error_text.lower()
 
     if "429" in lowered or "rate limit" in lowered or "quota" in lowered:
         return (
-            "Your Groq API rate limit has been reached.\n\n"
-            "Try this:\n"
-            "1. Wait a few seconds and send again\n"
-            "2. Reduce repeated test messages\n"
-            "3. Check your Groq usage and limits\n"
-            "4. Try again shortly"
+            "Groq hit a rate limit for a moment.\n\n"
+            "Give it a few seconds, then try again."
         )
 
     if (
@@ -91,31 +96,122 @@ def normalize_error_text(error_text):
     ):
         return (
             "The Groq API key looks invalid or unavailable.\n\n"
-            "Check that your key is correct and active."
+            "Check that the key is correct and active."
         )
 
     if "network" in lowered or "timeout" in lowered or "connection" in lowered:
         return (
-            "A network problem interrupted the request.\n\n"
-            "Check your internet connection and try again."
+            "The request got interrupted by a network problem.\n\n"
+            "Check your connection and try again."
         )
 
     return "The message could not be sent right now."
+
+
+def strip_emojis(text: str) -> str:
+    if not text:
+        return text
+
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F300-\U0001F5FF"
+        "\U0001F600-\U0001F64F"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F700-\U0001F77F"
+        "\U0001F780-\U0001F7FF"
+        "\U0001F800-\U0001F8FF"
+        "\U0001F900-\U0001F9FF"
+        "\U0001FA00-\U0001FAFF"
+        "\U00002600-\U000026FF"
+        "\U00002700-\U000027BF"
+        "]+",
+        flags=re.UNICODE,
+    )
+    return emoji_pattern.sub("", text).strip()
+
+
+def parse_risk_result(result):
+    if isinstance(result, tuple):
+        if len(result) >= 2:
+            return (result[0] or "none"), (result[1] or [])
+        if len(result) == 1:
+            return (result[0] or "none"), []
+    if isinstance(result, str):
+        return result or "none", []
+    return "none", []
+
+
+def safe_build_safety_reply(risk_level, user_name="there", tags=None):
+    try:
+        return build_safety_reply(
+            risk_level=risk_level,
+            user_name=user_name,
+            tags=tags or [],
+        )
+    except TypeError:
+        try:
+            return build_safety_reply(user_name=user_name)
+        except TypeError:
+            return build_safety_reply()
+
+
+def rewrite_friend_style(client, user_message, draft_reply, support_plan=None):
+    rewrite_prompt = build_rewrite_prompt(user_message, draft_reply, support_plan)
+
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You rewrite chatbot replies to sound like a real, caring person texting.\n"
+                    "Keep it warm, natural, and emotionally present.\n"
+                    "Do not sound scripted, robotic, or overly structured.\n"
+                    "Follow the support plan gently, not rigidly.\n"
+                    "Let the reply flow like a real human message."
+                ),
+            },
+            {"role": "user", "content": rewrite_prompt},
+        ],
+        temperature=0.9,
+        max_tokens=300,
+    )
+
+    return (completion.choices[0].message.content or "").strip()
 
 
 class GroqWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, api_key, history, user_message, parent=None):
+    def __init__(self, api_key, history, user_message, user_name="there", parent=None):
         super().__init__(parent)
         self.api_key = api_key
-        self.history = history
+        self.history = list(history or [])
         self.user_message = user_message
+        self.user_name = user_name
 
     def run(self):
         try:
             client = Groq(api_key=self.api_key) if self.api_key else Groq()
+
+            risk_result = detect_risk_level(self.user_message)
+            risk_level, risk_tags = parse_risk_result(risk_result)
+
+            if risk_level == "high":
+                final_reply = safe_build_safety_reply(
+                    risk_level=risk_level,
+                    user_name=self.user_name,
+                    tags=risk_tags,
+                )
+                self.finished.emit(final_reply.strip())
+                return
+
+            support_plan = build_esc_support_plan(
+                history=self.history,
+                user_message=self.user_message,
+                risk_level=risk_level,
+            )
 
             rag_context = ""
             if build_rag_context is not None:
@@ -124,123 +220,63 @@ class GroqWorker(QThread):
                 except Exception:
                     rag_context = ""
 
-            system_prompt = """
-You are a warm emotional companion, not a formal assistant.
-
-Your job is to talk like a caring, emotionally intelligent friend:
-- warm
-- gentle
-- calm
-- natural
-- human
-- never robotic
-- never corporate
-- never lecture-like
-
-How to reply:
-- Keep replies short: usually 1 to 4 sentences.
-- Prefer small paragraphs or line breaks, not one big block.
-- Start by emotionally acknowledging what the user feels.
-- Sound like a real friend talking in chat.
-- Use simple everyday words.
-- If the user is overwhelmed, slow the conversation down.
-- Offer only one small helpful step at a time.
-- Ask at most one gentle follow-up question.
-- Sometimes just being present is enough; do not force advice into every reply.
-- If the user seems to just want company, stay with them instead of trying to fix everything.
-- Match the user's energy softly: if they are quiet, be quiet; if they are emotional, be steady and kind.
-- Use the retrieved support context when it fits naturally, but never sound like a textbook or quote large chunks.
-- Do not say phrases like:
-  "As an AI..."
-  "Based on the provided context..."
-  "Here are 5 tips..."
-  "I understand your concern."
-- Do not give long essays unless the user clearly asks for detail.
-- Do not use bullet lists unless the user asks for steps.
-- Do not sound like therapy homework unless necessary.
-- Do not diagnose mental illness.
-- Do not claim to be a therapist, doctor, or human.
-- Do not create emotional dependency or tell the user that you are all they need.
-
-Safety behavior:
-- If the user mentions self-harm, suicide, wanting to die, or immediate danger, respond with extra care.
-- In those cases, encourage immediate real-world support from trusted people, crisis lines, or emergency services.
-- If support resources are available in retrieved context, use them naturally and clearly.
-- In high-risk moments, prioritize safety over normal friendly chat.
-
-Response style examples:
-
-Bad:
-That sounds difficult. Here are several strategies you can implement immediately...
-
-Good:
-That sounds really heavy.
-We can slow it down together.
-Do you want to talk about what hit you the hardest?
-
-Bad:
-Based on the provided material, grounding is an evidence-based technique.
-
-Good:
-Let's just come back to this moment for a second.
-Can you feel your feet on the floor right now?
-
-Bad:
-I understand your concern and recommend the following structured plan.
-
-Good:
-Yeah, that sounds exhausting.
-You do not have to solve all of it right now.
-"""
-
             messages = [
                 {
                     "role": "system",
-                    "content": system_prompt,
+                    "content": SYSTEM_PROMPT,
                 }
             ]
 
             recent_history = self.history[-MAX_HISTORY_TURNS:]
             for role, text in recent_history:
                 mapped_role = "assistant" if role == "model" else "user"
-                messages.append(
-                    {
-                        "role": mapped_role,
-                        "content": text,
-                    }
-                )
+                messages.append({"role": mapped_role, "content": text})
 
-            if rag_context:
-                final_user_message = (
-                    "Background support notes you may use if helpful:\n"
-                    f"{rag_context}\n\n"
-                    "Now reply to the user in a warm, natural, friend-like way.\n"
-                    "Keep it short and do not mention these notes.\n\n"
-                    f"User: {self.user_message}"
-                )
-            else:
-                final_user_message = self.user_message
-
-            messages.append(
-                {
-                    "role": "user",
-                    "content": final_user_message,
-                }
+            final_user_message = build_user_message(
+                self.user_message,
+                rag_context,
+                support_plan,
             )
+            messages.append({"role": "user", "content": final_user_message})
 
             completion = client.chat.completions.create(
                 model=GROQ_MODEL,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=512,
+                max_tokens=320,
             )
 
-            reply_text = completion.choices[0].message.content or ""
-            self.finished.emit(reply_text.strip())
+            draft_reply = (completion.choices[0].message.content or "").strip()
+
+            if not draft_reply:
+                draft_reply = "I'm here with you. Say that again in your own words."
+
+            try:
+                final_reply = rewrite_friend_style(
+                    client,
+                    self.user_message,
+                    draft_reply,
+                    support_plan,
+                )
+                if not final_reply:
+                    final_reply = draft_reply
+            except Exception:
+                final_reply = draft_reply
+
+            should_strip = False
+
+            if risk_level in {"medium", "high"}:
+                should_strip = True
+            elif not support_plan or not support_plan.get("emoji"):
+                should_strip = True
+
+            if should_strip:
+                final_reply = strip_emojis(final_reply)
+
+            self.finished.emit(final_reply.strip())
 
         except Exception as e:
             self.error.emit(str(e))
-
 
 class AuthPage(QWidget):
     auth_success = pyqtSignal(dict, str)
@@ -433,7 +469,10 @@ class AuthPage(QWidget):
             return
 
         for user in users:
-            if user["username"].lower() == username.lower() and user["password_hash"] == hash_password(password):
+            if (
+                user["username"].lower() == username.lower()
+                and user["password_hash"] == hash_password(password)
+            ):
                 self.error_label.setText("")
                 self.auth_success.emit(user, api_key)
                 return
@@ -451,6 +490,7 @@ class ChatPage(QWidget):
         self.history = []
         self.worker = None
         self.request_in_progress = False
+        self.pending_user_text = None
         self.build_ui()
 
     def build_ui(self):
@@ -458,14 +498,12 @@ class ChatPage(QWidget):
         root.setSpacing(0)
         root.setContentsMargins(0, 0, 0, 0)
 
-        # ── Top bar ──────────────────────────────────────────────────────────
         topbar = QFrame()
         topbar.setObjectName("TopBar")
         topbar_layout = QHBoxLayout()
         topbar_layout.setContentsMargins(20, 14, 20, 14)
         topbar_layout.setSpacing(12)
 
-        # Avatar circle with initials
         initials = "".join(p[0].upper() for p in self.user["full_name"].split()[:2])
         avatar = QLabel(initials)
         avatar.setFixedSize(38, 38)
@@ -506,13 +544,11 @@ class ChatPage(QWidget):
         topbar_layout.addWidget(self.signout_button)
         topbar.setLayout(topbar_layout)
 
-        # ── Chat view ────────────────────────────────────────────────────────
         self.chat_view = QTextEdit()
         self.chat_view.setReadOnly(True)
         self.chat_view.setObjectName("ChatView")
         self.chat_view.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
 
-        # ── Input area ───────────────────────────────────────────────────────
         input_wrap = QFrame()
         input_wrap.setObjectName("InputWrap")
         input_outer = QVBoxLayout()
@@ -554,14 +590,17 @@ class ChatPage(QWidget):
     def eventFilter(self, obj, event):
         if obj == self.input_box and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     return False
                 self.handle_send()
                 return True
         return super().eventFilter(obj, event)
 
     def clear_chat(self):
+        if self.request_in_progress:
+            return
         self.history = []
+        self.pending_user_text = None
         self.chat_view.clear()
         self.append_system_message("The conversation was cleared. You can start again anytime.")
 
@@ -588,34 +627,36 @@ class ChatPage(QWidget):
         if sender == "user":
             html = (
                 '<table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:12px;">'
-                '<tr>'
+                "<tr>"
                 '<td width="20%"></td>'
                 '<td width="80%" align="right">'
                 f'<div style="color:{label_color}; font-weight:600; font-size:9pt; margin-bottom:4px; text-align:right;">{self.escape_html(label)}</div>'
                 '<table cellspacing="0" cellpadding="0" align="right"><tr>'
                 f'<td style="background:{bubble_bg}; border:1px solid {bubble_border}; border-radius:{border_radius}; padding:10px 13px; color:#efefef; line-height:1.55;">'
-                f'{escaped}'
-                '</td></tr></table>'
-                '</td>'
-                '</tr></table>'
+                f"{escaped}"
+                "</td></tr></table>"
+                "</td>"
+                "</tr></table>"
             )
         else:
             html = (
                 '<table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:12px;">'
-                '<tr>'
+                "<tr>"
                 '<td width="80%" align="left">'
                 f'<div style="color:{label_color}; font-weight:600; font-size:9pt; margin-bottom:4px; text-align:left;">{self.escape_html(label)}</div>'
                 '<table cellspacing="0" cellpadding="0" align="left"><tr>'
                 f'<td style="background:{bubble_bg}; border:1px solid {bubble_border}; border-radius:{border_radius}; padding:10px 13px; color:#efefef; line-height:1.55;">'
-                f'{escaped}'
-                '</td></tr></table>'
-                '</td>'
+                f"{escaped}"
+                "</td></tr></table>"
+                "</td>"
                 '<td width="20%"></td>'
-                '</tr></table>'
+                "</tr></table>"
             )
 
         self.chat_view.insertHtml(html)
-        self.chat_view.verticalScrollBar().setValue(self.chat_view.verticalScrollBar().maximum())
+        self.chat_view.verticalScrollBar().setValue(
+            self.chat_view.verticalScrollBar().maximum()
+        )
 
     def append_system_message(self, text):
         self.chat_view.insertHtml(
@@ -629,7 +670,9 @@ class ChatPage(QWidget):
             </div>
             """
         )
-        self.chat_view.verticalScrollBar().setValue(self.chat_view.verticalScrollBar().maximum())
+        self.chat_view.verticalScrollBar().setValue(
+            self.chat_view.verticalScrollBar().maximum()
+        )
 
     @staticmethod
     def escape_html(text):
@@ -648,18 +691,21 @@ class ChatPage(QWidget):
             return
 
         self.request_in_progress = True
+        self.pending_user_text = user_text
         self.append_message("user", user_text)
-        self.history.append(("user", user_text))
         self.input_box.clear()
 
         self.send_button.setEnabled(False)
         self.input_box.setEnabled(False)
+        self.clear_button.setEnabled(False)
+        self.signout_button.setEnabled(False)
         self.status_label.setText("● thinking…")
 
         self.worker = GroqWorker(
             api_key=self.api_key,
             history=self.history,
             user_message=user_text,
+            user_name=self.user["full_name"].split()[0],
         )
         self.worker.finished.connect(self.on_reply)
         self.worker.error.connect(self.on_error)
@@ -671,19 +717,30 @@ class ChatPage(QWidget):
         if not reply_text:
             reply_text = "I am still here with you. Could you say that in another way?"
 
+        if self.pending_user_text:
+            self.history.append(("user", self.pending_user_text))
         self.history.append(("model", reply_text))
+
+        self.pending_user_text = None
         self.append_message("model", reply_text)
         self.status_label.setText("")
         self.send_button.setEnabled(True)
         self.input_box.setEnabled(True)
+        self.clear_button.setEnabled(True)
+        self.signout_button.setEnabled(True)
         self.input_box.setFocus()
+        self.worker = None
 
     def on_error(self, error_text):
         self.request_in_progress = False
+        self.pending_user_text = None
         self.status_label.setText("")
         self.send_button.setEnabled(True)
         self.input_box.setEnabled(True)
+        self.clear_button.setEnabled(True)
+        self.signout_button.setEnabled(True)
         self.input_box.setFocus()
+        self.worker = None
 
         message = QMessageBox(self)
         message.setIcon(QMessageBox.Icon.Warning)
