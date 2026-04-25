@@ -1,17 +1,17 @@
 """
-src/rag/rag_engine.py -- Simple local RAG engine for PetChat-2.0 v2.
+src/rag/rag_engine.py -- Lightweight local RAG engine for PetChat-2.0 v2.
 
 Features:
 - Loads .txt files from the project-level cleaned_txt/ folder
-- Chunks documents
-- Uses Ollama nomic-embed-text embeddings
+- Chunks documents into smaller prompt-friendly pieces
+- Uses Ollama embeddings
 - Uses FAISS for vector search when available
 - Degrades gracefully if faiss, numpy, or Ollama are unavailable
 
 Public API
 ----------
 _get_engine() -> RagEngine
-build_rag_context(query, max_chunks=5, min_score=0.25) -> str
+build_rag_context(query, max_chunks=2, min_score=0.22, max_chars=1800) -> str
 rebuild_index() -> bool
 """
 
@@ -21,12 +21,17 @@ import hashlib
 import json
 import logging
 import pickle
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_CHUNKS = 2
+_DEFAULT_MIN_SCORE = 0.22
+_DEFAULT_MAX_CONTEXT_CHARS = 1800
 
 
 def _get_config():
@@ -49,9 +54,37 @@ def _deps_available() -> bool:
     try:
         import faiss  # noqa: F401
         import numpy  # noqa: F401
+
         return True
     except ImportError:
         return False
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _normalize_for_fingerprint(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _clip_text(text: str, max_chars: int) -> str:
+    clean = _normalize_text(text)
+    if len(clean) <= max_chars:
+        return clean
+
+    clipped = clean[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{clipped}..." if clipped else clean[:max_chars]
+
+
+def _query_for_embedding(query: str) -> str:
+    clean = _normalize_text(query)
+    return f"search_query: {clean}"
+
+
+def _document_for_embedding(text: str) -> str:
+    clean = _normalize_text(text)
+    return f"search_document: {clean}"
 
 
 class _OllamaEmbedder:
@@ -83,7 +116,7 @@ class _OllamaEmbedder:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=45) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -125,6 +158,7 @@ def _load_docs(docs_dir: Path) -> list[dict[str, str]]:
     for path in sorted(docs_dir.glob("*.txt")):
         try:
             text = path.read_text(encoding="utf-8", errors="replace").strip()
+            text = _normalize_text(text)
             if text:
                 docs.append(
                     {
@@ -139,37 +173,70 @@ def _load_docs(docs_dir: Path) -> list[dict[str, str]]:
     return docs
 
 
+def _split_paragraphs(text: str) -> list[str]:
+    blocks = re.split(r"\n\s*\n", text)
+    cleaned = [_normalize_text(block) for block in blocks]
+    return [block for block in cleaned if block]
+
+
 def _chunk_text(
     text: str,
     source: str,
-    chunk_size: int = 400,
-    overlap: int = 80,
+    chunk_chars: int = 900,
+    overlap_chars: int = 120,
 ) -> list[dict[str, str]]:
-    words = text.split()
+    paragraphs = _split_paragraphs(text)
     chunks: list[dict[str, str]] = []
 
-    if not words:
-        return chunks
+    if not paragraphs:
+        clean = _normalize_text(text)
+        if clean:
+            return [{"source": source, "text": clean}]
+        return []
 
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-        chunk_text = " ".join(words[start:end]).strip()
+    buffer = ""
+    for para in paragraphs:
+        candidate = f"{buffer}\n\n{para}".strip() if buffer else para
 
-        if chunk_text:
-            chunks.append(
-                {
-                    "source": source,
-                    "text": chunk_text,
-                }
-            )
+        if len(candidate) <= chunk_chars:
+            buffer = candidate
+            continue
 
-        if end >= len(words):
-            break
+        if buffer:
+            chunks.append({"source": source, "text": buffer})
 
-        start += max(1, chunk_size - overlap)
+        if len(para) <= chunk_chars:
+            buffer = para
+            continue
 
-    return chunks
+        start = 0
+        while start < len(para):
+            end = min(start + chunk_chars, len(para))
+            piece = para[start:end].strip()
+            if piece:
+                chunks.append({"source": source, "text": piece})
+            if end >= len(para):
+                break
+            start += max(1, chunk_chars - overlap_chars)
+
+        buffer = ""
+
+    if buffer:
+        chunks.append({"source": source, "text": buffer})
+
+    final_chunks: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in chunks:
+        clean = _normalize_text(item["text"])
+        if len(clean) < 120:
+            continue
+        fp = hashlib.md5(f"{source}::{_normalize_for_fingerprint(clean)}".encode("utf-8")).hexdigest()
+        if fp in seen:
+            continue
+        seen.add(fp)
+        final_chunks.append({"source": source, "text": clean})
+
+    return final_chunks
 
 
 def _build_chunks(docs: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -192,6 +259,49 @@ def _doc_fingerprint(docs_dir: Path) -> str:
             continue
 
     return digest.hexdigest()
+
+
+def _source_priority(source: str, query: str) -> int:
+    source_l = (source or "").lower()
+    query_l = (query or "").lower()
+
+    crisis_terms = [
+        "suicide",
+        "self-harm",
+        "kill myself",
+        "unsafe",
+        "danger",
+        "emergency",
+        "hotline",
+        "helpline",
+        "1926",
+    ]
+    helper_terms = [
+        "help",
+        "support",
+        "what should i say",
+        "what can i do",
+        "friend",
+        "partner",
+        "someone",
+    ]
+
+    if "sri_lanka_support_resources" in source_l and any(term in query_l for term in crisis_terms):
+        return 0
+
+    if any(term in query_l for term in helper_terms):
+        if "who_doing_what_matters" in source_l:
+            return 1
+        if "northwestern_cbt_workbook" in source_l:
+            return 2
+        if "va_brief_cbt_depression" in source_l:
+            return 3
+        if "va_calmer_life" in source_l:
+            return 4
+        if "anxiety_depression_reduction" in source_l:
+            return 5
+
+    return 10
 
 
 class RagEngine:
@@ -234,6 +344,7 @@ class RagEngine:
                 if (
                     meta.get("fingerprint") == fingerprint
                     and meta.get("model") == embed_model
+                    and meta.get("format_version") == 2
                 ):
                     self._chunks = pickle.loads(cache_chunks.read_bytes())
                     self._index = faiss.read_index(str(cache_index))
@@ -265,7 +376,7 @@ class RagEngine:
                 model=embed_model,
             )
             vectors = embedder.encode(
-                [chunk["text"] for chunk in chunks],
+                [_document_for_embedding(chunk["text"]) for chunk in chunks],
                 normalize_embeddings=True,
             )
 
@@ -281,6 +392,7 @@ class RagEngine:
                     {
                         "fingerprint": fingerprint,
                         "model": embed_model,
+                        "format_version": 2,
                     }
                 ),
                 encoding="utf-8",
@@ -297,34 +409,79 @@ class RagEngine:
     def search(
         self,
         query: str,
-        max_chunks: int = 5,
-        min_score: float = 0.25,
+        max_chunks: int = _DEFAULT_MAX_CHUNKS,
+        min_score: float = _DEFAULT_MIN_SCORE,
     ) -> list[dict[str, Any]]:
-        if not self._ready or not query.strip():
+        clean_query = _normalize_text(query)
+
+        if not self._ready or not clean_query:
             return []
 
         if self._index is None or self._embedder is None:
             return []
 
         try:
-            query_vec = self._embedder.encode([query], normalize_embeddings=True)
-            scores, indices = self._index.search(query_vec, max_chunks * 2)
+            k = max(max_chunks * 3, 6)
+            query_vec = self._embedder.encode(
+                [_query_for_embedding(clean_query)],
+                normalize_embeddings=True,
+            )
+            scores, indices = self._index.search(query_vec, k)
 
             results: list[dict[str, Any]] = []
-            for score, idx in zip(scores[0], indices[0]):
+            seen_texts: set[str] = set()
+            seen_sources: set[tuple[str, str]] = set()
+
+            ranked = list(zip(scores[0], indices[0]))
+            ranked.sort(
+                key=lambda pair: (
+                    _source_priority(
+                        self._chunks[pair[1]].get("source", "") if pair[1] >= 0 else "",
+                        clean_query,
+                    ),
+                    -float(pair[0]),
+                )
+            )
+
+            for score, idx in ranked:
                 if idx < 0:
                     continue
                 if float(score) < min_score:
                     continue
 
                 chunk = dict(self._chunks[idx])
+                text = _normalize_text(str(chunk.get("text", "")))
+                source = str(chunk.get("source", "unknown")).strip()
+
+                if not text:
+                    continue
+
+                text_key = _normalize_for_fingerprint(text[:500])
+                if text_key in seen_texts:
+                    continue
+
+                source_key = (source, text_key[:120])
+                if source_key in seen_sources:
+                    continue
+
+                seen_texts.add(text_key)
+                seen_sources.add(source_key)
+
+                chunk["text"] = text
                 chunk["score"] = float(score)
                 results.append(chunk)
 
                 if len(results) >= max_chunks:
                     break
 
+            logger.info(
+                "RAG search query=%r returned %d chunks (requested=%d).",
+                clean_query[:80],
+                len(results),
+                max_chunks,
+            )
             return results
+
         except Exception as exc:  # noqa: BLE001
             logger.error("RAG search failed: %s", exc)
             return []
@@ -342,11 +499,12 @@ def _get_engine() -> RagEngine:
 
 def build_rag_context(
     query: str,
-    max_chunks: int = 5,
-    min_score: float = 0.25,
+    max_chunks: int = _DEFAULT_MAX_CHUNKS,
+    min_score: float = _DEFAULT_MIN_SCORE,
+    max_chars: int = _DEFAULT_MAX_CONTEXT_CHARS,
 ) -> str:
     """
-    Return a prompt-friendly RAG context string, or empty string if unavailable.
+    Return a compact prompt-friendly RAG context string, or empty string if unavailable.
     """
     results = _get_engine().search(
         query=query,
@@ -357,14 +515,39 @@ def build_rag_context(
     if not results:
         return ""
 
-    parts = []
-    for item in results:
-        source = item.get("source", "unknown")
-        text = str(item.get("text", "")).strip()
-        if text:
-            parts.append(f"[SOURCE: {source}]\n{text}")
+    parts: list[str] = []
+    used_chars = 0
 
-    return "\n\n".join(parts)
+    for item in results:
+        source = str(item.get("source", "unknown")).strip()
+        text = _clip_text(str(item.get("text", "")).strip(), 700)
+        if not text:
+            continue
+
+        block = f"[SOURCE: {source}]\n{text}"
+        projected = used_chars + len(block) + (2 if parts else 0)
+
+        if projected > max_chars:
+            remaining = max_chars - used_chars - len(f"[SOURCE: {source}]\n")
+            if remaining < 160:
+                break
+            block = f"[SOURCE: {source}]\n{_clip_text(text, remaining)}"
+            projected = used_chars + len(block) + (2 if parts else 0)
+
+        parts.append(block)
+        used_chars = projected
+
+        if used_chars >= max_chars:
+            break
+
+    context = "\n\n".join(parts).strip()
+    logger.info(
+        "Built RAG context for query=%r with %d chars from %d chunk(s).",
+        _normalize_text(query)[:80],
+        len(context),
+        len(parts),
+    )
+    return context
 
 
 def rebuild_index() -> bool:

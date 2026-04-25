@@ -20,12 +20,29 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+LOW = "low"
+MEDIUM = "medium"
+HIGH = "high"
+
+GET_SUPPORT = "get_support"
+HELP_SOMEONE = "help_someone"
+
+_DRAFT_TEMPERATURE = 0.68
+_REWRITE_TEMPERATURE = 0.48
+
+_DEFAULT_DRAFT_MAX_TOKENS = 260
+_DEFAULT_REWRITE_MAX_TOKENS = 220
+
 
 def _normalize_mode(mode: str | None) -> str:
     value = (mode or "").strip().lower()
     if value in {"help_someone", "help someone", "guided_help", "guided help"}:
-        return "help_someone"
-    return "get_support"
+        return HELP_SOMEONE
+    return GET_SUPPORT
+
+
+def _normalize_text(text: str | None) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
 
 
 def _trim_history(
@@ -33,7 +50,7 @@ def _trim_history(
     max_turns: int,
 ) -> list[dict[str, str]]:
     """
-    Keep only the most recent max_turns pairs.
+    Keep only the most recent max_turns user/assistant pairs.
     """
     if max_turns <= 0:
         return []
@@ -50,7 +67,7 @@ def _sanitize_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     for item in history or []:
         role = str(item.get("role", "")).strip()
-        content = str(item.get("content", "")).strip()
+        content = _normalize_text(str(item.get("content", "")))
 
         if role not in {"user", "assistant", "system"}:
             continue
@@ -62,6 +79,15 @@ def _sanitize_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
     return cleaned
 
 
+def _contains_any(text: str, terms: list[str]) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in terms)
+
+
+def _matches_any(text: str, patterns: list[str]) -> bool:
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _build_basic_support_plan(
     mode: str,
     user_message: str,
@@ -70,33 +96,44 @@ def _build_basic_support_plan(
     risk_tags: list[str],
 ) -> dict[str, Any]:
     """
-    Lightweight fallback support planner used until esc_support.py is added.
+    Lightweight fallback support planner used until a fuller planner is added.
 
     Returns a small dict compatible with prompts.py and pipeline emoji logic.
     """
+    _ = history
     normalized_mode = _normalize_mode(mode)
-    text = (user_message or "").lower()
+    text = _normalize_text(user_message).lower()
 
     stage = "exploration"
     primary_emotion = "distress"
     response_style = "warm and grounded"
     strategies: list[str] = []
-    use_emoji = risk_level == "low"
+    use_emoji = risk_level == LOW
 
-    if normalized_mode == "help_someone":
+    if normalized_mode == HELP_SOMEONE:
         primary_emotion = "concern"
         response_style = "supportive and practical"
         strategies = [
             "validate the user's concern for the other person",
             "give practical ways to support gently",
-            "suggest when to encourage professional help",
+            "suggest what the user could say in simple language",
+            "help the user avoid pressure or fixing language",
+            "suggest when to encourage professional or crisis help",
         ]
 
-        if any(word in text for word in ["suicide", "self-harm", "kill myself", "unsafe"]):
+        if _contains_any(text, ["suicide", "self-harm", "kill myself", "unsafe", "emergency"]):
             stage = "safety_guidance"
             use_emoji = False
-        elif any(word in text for word in ["how do i help", "what should i say", "what can i do"]):
+        elif _contains_any(
+            text,
+            ["what should i say", "how do i help", "how can i help", "what can i do"],
+        ):
             stage = "guidance"
+        elif _contains_any(
+            text,
+            ["withdrawing", "shutting everyone out", "isolating", "won't talk", "wont talk"],
+        ):
+            stage = "gentle_outreach"
         else:
             stage = "exploration"
 
@@ -109,20 +146,20 @@ def _build_basic_support_plan(
             "offer one small next step if appropriate",
         ]
 
-        if risk_level == "medium":
+        if risk_level == MEDIUM:
             stage = "stabilization"
             use_emoji = False
-        elif any(word in text for word in ["anxious", "anxiety", "stress", "overwhelmed"]):
+        elif _contains_any(text, ["anxious", "anxiety", "stress", "overwhelmed", "panic"]):
             primary_emotion = "anxiety"
             stage = "exploration"
-        elif any(word in text for word in ["sad", "empty", "lonely", "worthless"]):
+        elif _contains_any(text, ["sad", "empty", "lonely", "worthless", "hopeless"]):
             primary_emotion = "sadness"
             stage = "exploration"
-        elif any(word in text for word in ["angry", "mad", "frustrated", "upset"]):
+        elif _contains_any(text, ["angry", "mad", "frustrated", "upset"]):
             primary_emotion = "frustration"
             stage = "exploration"
 
-    if "isolation" in risk_tags or "hopelessness" in risk_tags:
+    if "isolation" in risk_tags or "hopelessness" in risk_tags or risk_level != LOW:
         use_emoji = False
 
     return {
@@ -137,33 +174,109 @@ def _build_basic_support_plan(
     }
 
 
-def _should_use_rag(mode: str) -> bool:
+def _is_low_value_turn(user_message: str) -> bool:
+    text = _normalize_text(user_message).lower()
+    return text in {"ok", "okay", "thanks", "thank you", "got it", "cool"}
+
+
+def _should_use_rag(
+    mode: str,
+    user_message: str,
+    risk_level: str,
+) -> bool:
     """
-    RAG is primarily used in Help Someone mode.
+    Use RAG selectively, mainly for Help Someone guidance turns.
     """
-    normalized = _normalize_mode(mode)
+    normalized_mode = _normalize_mode(mode)
+    text = _normalize_text(user_message)
+
+    if not text or _is_low_value_turn(text):
+        return False
 
     try:
         from src.config import RAG_ENABLED  # noqa: PLC0415
+
         if not RAG_ENABLED:
             return False
     except Exception:
         return False
 
-    return normalized == "help_someone"
+    if risk_level == HIGH:
+        return False
+
+    helper_patterns = [
+        r"\bmy friend\b",
+        r"\bmy partner\b",
+        r"\bmy boyfriend\b",
+        r"\bmy girlfriend\b",
+        r"\bmy wife\b",
+        r"\bmy husband\b",
+        r"\bmy sister\b",
+        r"\bmy brother\b",
+        r"\bmy mom\b",
+        r"\bmy dad\b",
+        r"\bsomeone i care about\b",
+        r"\bwhat should i say\b",
+        r"\bhow do i help\b",
+        r"\bhow can i help\b",
+        r"\bwhat can i do\b",
+        r"\bwithdrawing\b",
+        r"\bshutting everyone out\b",
+        r"\bnothing matters\b",
+        r"\bhopeless\b",
+        r"\bpanic\b",
+        r"\banxiety\b",
+        r"\bdepressed\b",
+    ]
+
+    if normalized_mode == HELP_SOMEONE and _matches_any(text, helper_patterns):
+        return True
+
+    if normalized_mode == GET_SUPPORT and risk_level == MEDIUM and len(text) > 180:
+        return True
+
+    return False
 
 
-def _build_rag_context(mode: str, user_message: str) -> tuple[str, bool]:
+def _build_rag_query(
+    mode: str,
+    user_message: str,
+    risk_level: str,
+) -> str:
+    text = _normalize_text(user_message)
+
+    if _normalize_mode(mode) == HELP_SOMEONE:
+        return f"how to support someone what to say practical help {text}"
+
+    if risk_level == MEDIUM:
+        return f"emotional support grounding coping steps {text}"
+
+    return text
+
+
+def _build_rag_context(mode: str, user_message: str, risk_level: str) -> tuple[str, bool]:
     """
-    Build RAG context only when the current mode calls for it.
+    Build RAG context only when the current mode/turn calls for it.
     """
-    if not _should_use_rag(mode):
+    if not _should_use_rag(mode, user_message, risk_level):
         return "", False
 
     try:
-        from src.rag.retriever import build_rag_context  # noqa: PLC0415
+        from src.rag.rag_engine import build_rag_context  # noqa: PLC0415
 
-        context = build_rag_context(user_message)
+        normalized_mode = _normalize_mode(mode)
+        query = _build_rag_query(normalized_mode, user_message, risk_level)
+
+        max_chunks = 2 if normalized_mode == HELP_SOMEONE else 1
+        max_chars = 1600 if normalized_mode == HELP_SOMEONE else 900
+        min_score = 0.20 if risk_level == MEDIUM else 0.22
+
+        context = build_rag_context(
+            query=query,
+            max_chunks=max_chunks,
+            min_score=min_score,
+            max_chars=max_chars,
+        )
         context = context.strip() if isinstance(context, str) else ""
         return context, bool(context)
     except Exception as exc:  # noqa: BLE001
@@ -179,6 +292,7 @@ def _build_memory_context(
     """
     try:
         from src.config import USE_SUPABASE_MEMORY  # noqa: PLC0415
+
         if not USE_SUPABASE_MEMORY:
             return "", False
     except Exception:
@@ -186,6 +300,16 @@ def _build_memory_context(
 
     _ = user_info or {}
     return "", False
+
+
+def _get_max_history_turns(default: int = 6) -> int:
+    try:
+        from src.config import MAX_HISTORY_TURNS  # noqa: PLC0415
+
+        value = int(MAX_HISTORY_TURNS)
+        return value if value >= 0 else default
+    except Exception:
+        return default
 
 
 def _build_generation_messages(
@@ -197,7 +321,6 @@ def _build_generation_messages(
     memory_context: str,
     user_info: dict[str, Any] | None,
 ) -> list[dict[str, str]]:
-    from src.config import MAX_HISTORY_TURNS  # noqa: PLC0415
     from src.core.prompts import (  # noqa: PLC0415
         FRIEND_STYLE_EXAMPLES,
         build_generation_system_prompt,
@@ -215,8 +338,8 @@ def _build_generation_messages(
         {"role": "system", "content": system_prompt},
     ]
     messages.extend(FRIEND_STYLE_EXAMPLES)
-    messages.extend(_trim_history(_sanitize_history(history), MAX_HISTORY_TURNS))
-    messages.append({"role": "user", "content": user_message.strip()})
+    messages.extend(_trim_history(history, _get_max_history_turns()))
+    messages.append({"role": "user", "content": _normalize_text(user_message)})
     return messages
 
 
@@ -261,7 +384,53 @@ def _strip_emoji(text: str) -> str:
 
 
 def _allow_emojis(plan: dict[str, Any], risk_level: str) -> bool:
-    return bool(plan.get("use_emoji", False)) and risk_level == "low"
+    return bool(plan.get("use_emoji", False)) and risk_level == LOW
+
+
+def _trim_output(text: str, max_chars: int) -> str:
+    clean = _normalize_text(text)
+    if len(clean) <= max_chars:
+        return clean
+
+    clipped = clean[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{clipped}..." if clipped else clean[:max_chars]
+
+
+def _draft_max_tokens(
+    mode: str,
+    risk_level: str,
+    rag_used: bool,
+) -> int:
+    if risk_level == MEDIUM:
+        return 220
+    if rag_used and _normalize_mode(mode) == HELP_SOMEONE:
+        return 230
+    return _DEFAULT_DRAFT_MAX_TOKENS
+
+
+def _rewrite_max_tokens(risk_level: str) -> int:
+    if risk_level == MEDIUM:
+        return 180
+    return _DEFAULT_REWRITE_MAX_TOKENS
+
+
+def _fallback_reply(risk_level: str, mode: str) -> str:
+    from src.core.prompts import SAFETY_REPLY_MEDIUM  # noqa: PLC0415
+
+    if risk_level == MEDIUM:
+        return SAFETY_REPLY_MEDIUM
+
+    if _normalize_mode(mode) == HELP_SOMEONE:
+        return (
+            "Hey, that sounds really hard, buddy. "
+            "You do not need perfect words here. "
+            "A simple message like 'I care about you, and I am here with you' is often a good place to start."
+        )
+
+    return (
+        "Hey, that sounds really hard right now. "
+        "We can stay with the most important part first and take it one step at a time."
+    )
 
 
 def _error_result(
@@ -271,12 +440,9 @@ def _error_result(
     rag_used: bool,
     rag_context: str,
     error: str,
+    mode: str,
 ) -> dict[str, Any]:
-    fallback = (
-        "Something went wrong on my side just now. "
-        "Please try again in a moment. "
-        "I am still here with you."
-    )
+    fallback = _fallback_reply(risk_level, mode)
 
     return {
         "risk_level": risk_level,
@@ -288,6 +454,94 @@ def _error_result(
         "final_reply": fallback,
         "error": error,
     }
+
+
+def _looks_like_wrong_help_someone_perspective(text: str, user_message: str) -> bool:
+    """
+    Detect common cases where the model answers as if the user is the distressed
+    person instead of the helper.
+    """
+    reply = _normalize_text(text).lower()
+    user = _normalize_text(user_message).lower()
+
+    if not reply:
+        return False
+
+    bad_patterns = [
+        "i'm here with you",
+        "i am here with you",
+        "you are not alone",
+        "what you're feeling",
+        "what you are feeling",
+        "you matter",
+        "you've been through",
+        "you have been through",
+        "reach out when these feelings come up",
+        "after losing your friend",
+        "i'm here now as well",
+        "i am here now as well",
+    ]
+
+    helper_signals = [
+        "you could say",
+        "you can say",
+        "try saying",
+        "let them know",
+        "check in with them",
+        "reach out to them",
+        "be there for them",
+        "support them",
+        "ask them",
+    ]
+
+    if any(signal in reply for signal in helper_signals):
+        return False
+
+    if any(pattern in reply for pattern in bad_patterns):
+        return True
+
+    if "my friend" in user and "your friend" in reply and "losing your friend" in reply:
+        return True
+
+    return False
+
+
+def _rewrite_help_someone_repair(
+    provider: Any,
+    draft_reply: str,
+    user_message: str,
+    plan: dict[str, Any],
+    risk_level: str,
+) -> str:
+    """
+    One lightweight repair pass if the rewrite drifts into the wrong perspective.
+    """
+    repair_instruction = (
+        "Rewrite this reply so it clearly speaks to the user as a helper supporting another person.\n"
+        "Keep the helper perspective intact.\n"
+        "Do not talk as if the user is the depressed or distressed person.\n"
+        "Do not say things like 'I am here with you' to the struggling friend.\n"
+        "Give warm, practical wording, and include one simple line the user could say if helpful.\n"
+        "Keep it concise, natural, and chat-friendly.\n"
+        "Do not start with the word 'I'.\n\n"
+        f"User message:\n{_normalize_text(user_message)}\n\n"
+        f"Current reply:\n{_normalize_text(draft_reply)}\n\n"
+        "Fixed reply:"
+    )
+
+    try:
+        repaired = provider.chat(
+            [
+                {"role": "system", "content": "You are rewriting a reply to preserve the correct perspective."},
+                {"role": "user", "content": repair_instruction},
+            ],
+            temperature=0.35,
+            max_tokens=190 if risk_level == LOW else 170,
+        )
+        return _trim_output(repaired, max_chars=700)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Helper-perspective repair failed: %s", exc)
+        return _trim_output(draft_reply, max_chars=700)
 
 
 def run_chat_turn(
@@ -319,17 +573,17 @@ def run_chat_turn(
         risk_level, risk_tags, support_plan,
         rag_used, rag_context, draft_reply, final_reply
     """
-    from src.core.prompts import SAFETY_REPLY_HIGH, SAFETY_REPLY_MEDIUM  # noqa: PLC0415
+    from src.core.prompts import SAFETY_REPLY_HIGH  # noqa: PLC0415
     from src.core.providers import build_provider  # noqa: PLC0415
     from src.core.safety import detect_risk_level  # noqa: PLC0415
 
     normalized_mode = _normalize_mode(mode)
-    clean_message = (user_message or "").strip()
+    clean_message = _normalize_text(user_message)
     clean_history = _sanitize_history(history)
 
     if not clean_message:
         return {
-            "risk_level": "low",
+            "risk_level": LOW,
             "risk_tags": [],
             "support_plan": {},
             "rag_used": False,
@@ -342,9 +596,9 @@ def run_chat_turn(
     risk_level, risk_tags = detect_risk_level(clean_message)
     logger.info("Risk level=%s tags=%s mode=%s", risk_level, risk_tags, normalized_mode)
 
-    if risk_level == "high":
+    if risk_level == HIGH:
         return {
-            "risk_level": "high",
+            "risk_level": HIGH,
             "risk_tags": risk_tags,
             "support_plan": {},
             "rag_used": False,
@@ -361,19 +615,12 @@ def run_chat_turn(
         risk_tags=risk_tags,
     )
 
-    rag_context, rag_used = _build_rag_context(normalized_mode, clean_message)
+    rag_context, rag_used = _build_rag_context(
+        mode=normalized_mode,
+        user_message=clean_message,
+        risk_level=risk_level,
+    )
     memory_context, _memory_used = _build_memory_context(user_info or {})
-
-    if risk_level == "medium" and not plan:
-        return {
-            "risk_level": risk_level,
-            "risk_tags": risk_tags,
-            "support_plan": {},
-            "rag_used": rag_used,
-            "rag_context": rag_context,
-            "draft_reply": SAFETY_REPLY_MEDIUM,
-            "final_reply": SAFETY_REPLY_MEDIUM,
-        }
 
     try:
         provider = build_provider(session_config)
@@ -386,6 +633,7 @@ def run_chat_turn(
             rag_used=rag_used,
             rag_context=rag_context,
             error=str(exc),
+            mode=normalized_mode,
         )
 
     generation_messages = _build_generation_messages(
@@ -398,11 +646,16 @@ def run_chat_turn(
         user_info=user_info or {},
     )
 
+    draft_reply = ""
     try:
         draft_reply = provider.chat(
             generation_messages,
-            temperature=0.75,
-            max_tokens=420,
+            temperature=_DRAFT_TEMPERATURE,
+            max_tokens=_draft_max_tokens(
+                mode=normalized_mode,
+                risk_level=risk_level,
+                rag_used=rag_used,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("Draft generation failed: %s", exc)
@@ -413,7 +666,10 @@ def run_chat_turn(
             rag_used=rag_used,
             rag_context=rag_context,
             error=str(exc),
+            mode=normalized_mode,
         )
+
+    draft_reply = _trim_output(draft_reply, max_chars=900)
 
     try:
         rewrite_messages = _build_rewrite_messages(
@@ -424,17 +680,32 @@ def run_chat_turn(
         )
         final_reply = provider.chat(
             rewrite_messages,
-            temperature=0.65,
-            max_tokens=320,
+            temperature=_REWRITE_TEMPERATURE,
+            max_tokens=_rewrite_max_tokens(risk_level),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Rewrite failed, using draft: %s", exc)
         final_reply = draft_reply
 
+    final_reply = _trim_output(final_reply, max_chars=700)
+
+    if normalized_mode == HELP_SOMEONE and _looks_like_wrong_help_someone_perspective(
+        final_reply,
+        clean_message,
+    ):
+        logger.warning("Detected wrong helper-mode perspective; running repair rewrite.")
+        final_reply = _rewrite_help_someone_repair(
+            provider=provider,
+            draft_reply=final_reply,
+            user_message=clean_message,
+            plan=plan,
+            risk_level=risk_level,
+        )
+
     if not _allow_emojis(plan, risk_level):
         final_reply = _strip_emoji(final_reply)
 
-    final_reply = final_reply.strip()
+    final_reply = final_reply.strip() or _fallback_reply(risk_level, normalized_mode)
 
     return {
         "risk_level": risk_level,

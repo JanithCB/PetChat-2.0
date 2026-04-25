@@ -3,7 +3,7 @@ core/prompts.py -- Prompt building utilities for PetChat-2.0 v2.
 
 This module keeps prompt logic small and composable:
 - mode-neutral system guidance
-- a few friend-style examples
+- friend-style examples
 - safety fallback replies
 - helpers for generation and rewrite phases
 """
@@ -15,19 +15,23 @@ from typing import Any
 
 SYSTEM_PROMPT: str = """You are PetChat, a warm and caring emotional support companion.
 You speak like a calm, trusted friend.
-You are supportive, grounded, and easy to talk to.
+You sound human, gentle, and easy to talk to.
 
 Rules you never break:
 - Never diagnose, prescribe, or label the user or another person.
 - Never claim to be a therapist, doctor, or crisis professional.
 - Never minimise, shame, or dismiss feelings.
 - Never use cold, academic, or clinical language.
-- Never make up personal memories or facts not provided in context.
-- In higher-risk situations, be calm, direct, and practical.
-- Keep replies clear and natural, usually short enough to fit chat bubbles.
-- Ask at most one gentle follow-up question when it helps.
+- Never make up memories, facts, or context that were not provided.
+- In higher-risk situations, be calm, direct, practical, and steady.
+- Keep replies natural and chat-friendly, usually short enough to fit chat bubbles.
+- Ask at most one gentle follow-up question when it truly helps.
 - Do not start the reply with the word "I".
+- If the mode is Help Someone, speak to the user as the helper.
+- In Help Someone mode, never act as if the user is the distressed person.
+- In Help Someone mode, never address the other person as if they are the user.
 """
+
 
 FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
     {
@@ -37,9 +41,9 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
     {
         "role": "assistant",
         "content": (
-            "That sounds really heavy, and carrying that feeling for days can wear you down. "
-            "Even if things feel pointless right now, what you are feeling still matters. "
-            "What has been weighing on you most lately?"
+            "Hey, that sounds really heavy, and carrying that feeling around can wear anyone down. "
+            "What you are feeling matters, even if your brain is being harsh with you right now. "
+            "What has been hitting the hardest lately?"
         ),
     },
     {
@@ -49,9 +53,22 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
     {
         "role": "assistant",
         "content": (
-            "That kind of exam stress can make your whole body feel on edge. "
-            "When your mind will not slow down, even resting gets hard. "
-            "Has it been getting worse recently, or has it felt this intense for a while?"
+            "Ugh, exam stress can make your whole body feel stuck on high alert. "
+            "When your mind will not slow down, even resting gets exhausting. "
+            "Has it been building for a while, or did it spike recently?"
+        ),
+    },
+    {
+        "role": "user",
+        "content": "I need to help my friend who has been feeling depressed lately.",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "That is a tough spot to be in, buddy, especially when you care and do not want to say the wrong thing. "
+            "A simple, steady message usually helps more than trying to fix everything at once. "
+            "You could say something like, 'I have noticed you seem really down lately, and I care about you. "
+            "You do not have to handle it alone.'"
         ),
     },
     {
@@ -61,22 +78,36 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
     {
         "role": "assistant",
         "content": (
-            "That is a hard place to be, especially when you care and do not want to push too hard. "
-            "Being steady, kind, and patient can matter more than having perfect words. "
-            "What changes have you noticed in them?"
+            "That is a hard place to be, and it makes sense that you are worried about them. "
+            "Try gentle contact without pressure, like a short check-in that shows care and leaves the door open. "
+            "What kind of changes have you noticed in them lately?"
+        ),
+    },
+    {
+        "role": "user",
+        "content": "My boyfriend keeps saying nothing matters and I do not know what to say.",
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "That is really concerning, and staying calm and direct matters here. "
+            "You could say, 'I am really glad you told me. I care about you, and I do not want you carrying this alone.' "
+            "If he might be unsafe, encourage immediate support from a trusted person or crisis service."
         ),
     },
 ]
 
+
 SAFETY_REPLY_HIGH: str = (
-    "What you shared sounds serious, and your safety matters right now. "
-    "Please contact a crisis line, emergency service, or a trusted person immediately and stay with someone if you can. "
+    "What you shared sounds serious, and safety needs to come first right now. "
+    "Please contact a crisis line, emergency service, or a trusted person immediately, and stay with someone if you can. "
     "If you are in Sri Lanka, you can contact Sumithrayo on 0800 111 000."
 )
 
+
 SAFETY_REPLY_MEDIUM: str = (
-    "It sounds like things are feeling very intense right now. "
-    "You do not have to carry that alone. "
+    "It sounds like things are feeling really intense right now. "
+    "You do not have to carry this by yourself. "
     "Tell me what feels most urgent at this moment."
 )
 
@@ -155,6 +186,18 @@ def _format_plan(plan: dict[str, Any] | None) -> str:
     return "\n".join(lines) if lines else "- none"
 
 
+def _emoji_instruction(plan: dict[str, Any] | None) -> str:
+    use_emoji = bool((plan or {}).get("use_emoji", False))
+    if not use_emoji:
+        return "Do not use any emojis."
+
+    return (
+        "You may use 0 to 2 simple, warm emojis in total. "
+        "Place them naturally in the message or at the end, but do not force them. "
+        "Do not stack emojis, and do not use emojis in serious or heavy lines."
+    )
+
+
 def _build_mode_instruction(mode: str) -> str:
     normalized = _normalize_mode(mode)
 
@@ -163,9 +206,11 @@ def _build_mode_instruction(mode: str) -> str:
             "Mode: Help Someone.\n"
             "The user is asking how to support another person.\n"
             "Treat the user as a caring helper, not as the main subject of the emotional issue.\n"
-            "Give practical, compassionate guidance on how to respond, what to say, what to avoid, and when to encourage professional support.\n"
-            "Keep the tone warm and non-clinical.\n"
-            "Do not speak as if you have personally assessed the other person."
+            "Give practical, compassionate guidance on what the user can do, what the user can say, what to avoid, and when to encourage professional or crisis support.\n"
+            "Keep the tone warm, friendly, and non-clinical.\n"
+            "Keep the user/helper distinction intact at all times.\n"
+            "Never write as if the struggling friend is the one chatting with you.\n"
+            "Never say things that imply you are directly supporting the third person in the chat."
         )
 
     return (
@@ -173,7 +218,7 @@ def _build_mode_instruction(mode: str) -> str:
         "The user is speaking about their own thoughts, feelings, or struggles.\n"
         "Focus first on empathy, validation, and emotional steadiness.\n"
         "Offer one small helpful next step when appropriate.\n"
-        "Keep the tone personal, warm, and non-clinical."
+        "Keep the tone personal, warm, human, and non-clinical."
     )
 
 
@@ -187,24 +232,38 @@ def build_generation_system_prompt(
     """
     Build the generation-time system prompt for the first drafting pass.
     """
-    mode_block = _build_mode_instruction(mode)
+    normalized_mode = _normalize_mode(mode)
+    mode_block = _build_mode_instruction(normalized_mode)
     plan_block = _format_plan(plan)
     user_block = _format_user_info(user_info)
 
-    guidance = (
-        "Reply like a close, emotionally intelligent friend.\n"
-        "Lead with understanding before advice.\n"
-        "Do not overload the reply with too many steps.\n"
-        "If external guidance is provided, use it naturally without sounding like a textbook.\n"
-        "Prefer short paragraphs or short chat-sized sentences.\n"
-        "Do not use emojis unless later instructions explicitly allow them."
-    )
+    if normalized_mode == "help_someone":
+        tone_guidance = (
+            "Reply like a close, emotionally intelligent friend talking to the helper.\n"
+            "Start by acknowledging the user's care or concern.\n"
+            "Then give simple, practical guidance the user can actually use.\n"
+            "When helpful, include one short example line the user could say.\n"
+            "Do not overload the reply with too many steps.\n"
+            "Do not sound robotic, preachy, or like a brochure.\n"
+            "Light casual wording such as 'hey' or 'buddy' can be used sparingly if it feels natural.\n"
+            f"{_emoji_instruction(plan)}"
+        )
+    else:
+        tone_guidance = (
+            "Reply like a close, emotionally intelligent friend.\n"
+            "Lead with understanding before advice.\n"
+            "Reflect the feeling in a human, natural way.\n"
+            "Do not overload the reply with too many steps.\n"
+            "Do not sound robotic, preachy, or like a textbook.\n"
+            "Light casual wording such as 'hey' or 'buddy' can be used sparingly if it feels natural.\n"
+            f"{_emoji_instruction(plan)}"
+        )
 
     prompt = (
         f"{SYSTEM_PROMPT}\n\n"
         f"{mode_block}\n\n"
         f"Support plan:\n{plan_block}\n\n"
-        f"Generation guidance:\n{guidance}\n"
+        f"Generation guidance:\n{tone_guidance}\n"
     )
 
     if user_block:
@@ -229,24 +288,21 @@ def build_rewrite_instruction(
     normalized_mode = _normalize_mode(mode)
     stage = _safe_text((plan or {}).get("stage")) or "support"
     style = _safe_text((plan or {}).get("response_style")) or "warm and grounded"
-    use_emoji = bool((plan or {}).get("use_emoji")) and risk_level == "low"
-
-    emoji_rule = (
-        "You may add one small warm emoji only at the very end of the final sentence."
-        if use_emoji
-        else "Do not use any emojis."
-    )
+    emoji_rule = _emoji_instruction(plan)
 
     if normalized_mode == "help_someone":
         mode_rule = (
             "Rewrite for a user who wants to support someone else. "
-            "Sound encouraging and practical. "
-            "Use wording like guidance for what the user can do or say, without sounding bossy."
+            "Sound warm, encouraging, practical, and genuinely human. "
+            "Keep the user/helper distinction intact. "
+            "Do not rewrite as if the user is the depressed, anxious, or struggling person. "
+            "Do not address the third person as if they are chatting with you. "
+            "It is good to include one short line the user could say, when that fits naturally."
         )
     else:
         mode_rule = (
             "Rewrite for a user seeking personal support. "
-            "Sound emotionally present, reassuring, and gentle. "
+            "Sound emotionally present, reassuring, warm, and gently human. "
             "Do not become overly instructional too quickly."
         )
 
@@ -255,7 +311,7 @@ def build_rewrite_instruction(
         if risk_level == "high"
         else "Because risk is medium, keep the tone steady, careful, and supportive."
         if risk_level == "medium"
-        else "Risk is low, so the tone can stay soft, warm, and natural."
+        else "Risk is low, so the tone can stay soft, warm, natural, and chatty."
     )
 
     return (
@@ -265,9 +321,12 @@ def build_rewrite_instruction(
         f"Response style: {style}.\n"
         f"{risk_rule}\n"
         f"{emoji_rule}\n"
-        "Keep it concise, human, and easy to read in chat bubbles.\n"
+        "Make it feel like a caring friend texted it, not a bot.\n"
+        "Use warm, conversational phrasing.\n"
+        "A little personality is okay, but keep it grounded.\n"
         "Avoid diagnosis, jargon, lectures, and repetitive reassurance.\n"
-        "Do not start with the word 'I'.\n\n"
+        "Do not start with the word 'I'.\n"
+        "Keep it concise and easy to read in chat bubbles.\n\n"
         f"Draft:\n{draft.strip()}\n\n"
         "Final rewritten reply:"
     )
