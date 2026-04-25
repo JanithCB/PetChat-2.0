@@ -1,88 +1,51 @@
 """
-core/providers.py — Provider abstraction layer for PetChat-2.0.
+core/providers.py -- Provider abstraction layer for PetChat-2.0 v2.
 
-The rest of the app calls provider.chat() only; HTTP details are hidden here.
-
-Supported backends
-------------------
-CloudProvider  — OpenAI-compatible REST endpoint (Groq, OpenAI, Google Gemini)
-LocalProvider  — Ollama HTTP API (http://localhost:11434)
-
-Factory
--------
-build_provider(session_config) -> BaseProvider
-    Creates the correct concrete provider from the session_config dict that
-    ModelSetupPage emits and MainWindow forwards to ChatPage.
+The rest of the app should only call provider.chat(...).
+This module hides HTTP details for:
+- Local Ollama models
+- Cloud OpenAI-compatible chat completion APIs
 """
 
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from typing import Any
 
-from petchat.config import (
-    CLOUD_PROVIDERS,
-    GROQ_API_KEY,
-    GOOGLE_API_KEY,
-    OPENAI_API_KEY,
-    LOCAL_PROVIDERS,
-    OLLAMA_BASE_URL,
-)
+from src.config import OLLAMA_BASE_URL
 
-
-# ---------------------------------------------------------------------------
-# Endpoint registry
-# ---------------------------------------------------------------------------
-
-# Maps provider_id -> (base_url, default_api_key)
-_CLOUD_ENDPOINTS: dict[str, tuple[str, str]] = {
-    "llama_scout": ("https://api.groq.com/openai/v1", GROQ_API_KEY),
-    "secondary":   ("https://generativelanguage.googleapis.com/v1beta/openai", GOOGLE_API_KEY),
-}
-
-# Fallback for any unknown provider_id — assumes OpenAI-compatible.
-_DEFAULT_CLOUD_ENDPOINT = ("https://api.openai.com/v1", OPENAI_API_KEY)
-
-
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
 
 class ProviderError(RuntimeError):
-    """Non-retryable error returned by a provider (bad key, model not found…)."""
+    """Raised when a provider request fails in a non-retryable way."""
 
 
 class ProviderTimeout(ProviderError):
-    """Request exceeded the timeout threshold."""
+    """Raised when a provider request times out."""
 
-
-# ---------------------------------------------------------------------------
-# Base class
-# ---------------------------------------------------------------------------
 
 class BaseProvider(ABC):
     """
-    Minimal interface every provider must implement.
-
-    Parameters
-    ----------
-    model_id   : Full model string forwarded to the inference API.
-    provider_id: Stable key from config.py — used for endpoint lookup.
-    api_key    : Bearer token (empty string for local providers).
+    Abstract provider interface used by the pipeline.
     """
 
     def __init__(
         self,
         model_id: str,
         provider_id: str = "",
+        base_url: str = "",
         api_key: str = "",
     ) -> None:
-        self.model_id    = model_id
-        self.provider_id = provider_id
-        self.api_key     = api_key
+        self.model_id = (model_id or "").strip()
+        self.provider_id = (provider_id or "").strip()
+        self.base_url = (base_url or "").strip()
+        self.api_key = (api_key or "").strip()
+
+        if not self.model_id:
+            raise ProviderError("model_id is required.")
 
     @abstractmethod
     def chat(
@@ -92,65 +55,67 @@ class BaseProvider(ABC):
         max_tokens: int = 512,
     ) -> str:
         """
-        Send a chat completion request and return the assistant reply text.
-
-        Parameters
-        ----------
-        messages    : OpenAI-style message list [{"role": …, "content": …}, …]
-        temperature : Sampling temperature.
-        max_tokens  : Upper bound on reply length.
-
-        Raises
-        ------
-        ProviderError   : Any non-retryable API / model error.
-        ProviderTimeout : Request timed out.
+        Send a chat request and return the assistant text.
         """
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(model_id={self.model_id!r})"
+        return (
+            f"{self.__class__.__name__}("
+            f"model_id={self.model_id!r}, provider_id={self.provider_id!r})"
+        )
 
 
-# ---------------------------------------------------------------------------
-# Shared HTTP helper
-# ---------------------------------------------------------------------------
+def _normalize_base_url(base_url: str, suffix: str) -> str:
+    clean = (base_url or "").rstrip("/")
+    if not clean:
+        return suffix
+    if clean.endswith(suffix):
+        return clean
+    return f"{clean}{suffix}"
+
 
 def _post_json(
     url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
-    timeout: int = 60,
+    timeout: int = 90,
 ) -> dict[str, Any]:
-    """
-    Minimal JSON POST using only the stdlib (no httpx / requests dependency).
-    Returns the parsed JSON response body.
-    """
-    body = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")
-        raise ProviderError(f"HTTP {exc.code} from {url}: {detail}") from exc
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ProviderError(f"HTTP {exc.code} from provider: {detail}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, socket.timeout):
+            raise ProviderTimeout("Provider request timed out.") from exc
+        raise ProviderError(f"Could not reach provider: {reason}") from exc
     except TimeoutError as exc:
-        raise ProviderTimeout(f"Request to {url} timed out after {timeout}s") from exc
+        raise ProviderTimeout("Provider request timed out.") from exc
+    except json.JSONDecodeError as exc:
+        raise ProviderError("Provider returned invalid JSON.") from exc
     except Exception as exc:  # noqa: BLE001
-        raise ProviderError(f"Request to {url} failed: {exc}") from exc
+        raise ProviderError(f"Provider request failed: {exc}") from exc
 
-
-# ---------------------------------------------------------------------------
-# CloudProvider
-# ---------------------------------------------------------------------------
 
 class CloudProvider(BaseProvider):
     """
-    OpenAI-compatible chat completions endpoint.
+    OpenAI-compatible cloud provider.
 
-    Works with:
-    - Groq  (llama-4-scout, llama3, mixtral, …)
-    - OpenAI
-    - Google Gemini (via its OpenAI-compatible layer)
-    - Any other provider that follows the /v1/chat/completions spec.
+    Expects:
+    - base_url like https://api.openai.com/v1
+    - api_key
+    - model_id
     """
 
     _TIMEOUT_S = 90
@@ -159,21 +124,22 @@ class CloudProvider(BaseProvider):
         self,
         model_id: str,
         provider_id: str = "",
+        base_url: str = "",
         api_key: str = "",
     ) -> None:
-        super().__init__(model_id, provider_id, api_key)
-
-        base_url, default_key = _CLOUD_ENDPOINTS.get(
-            provider_id, _DEFAULT_CLOUD_ENDPOINT
+        super().__init__(
+            model_id=model_id,
+            provider_id=provider_id,
+            base_url=base_url,
+            api_key=api_key,
         )
-        self._endpoint = f"{base_url}/chat/completions"
-        self._api_key  = api_key or default_key
 
-        if not self._api_key:
-            raise ProviderError(
-                f"No API key found for provider '{provider_id}'. "
-                "Set it in the model setup screen or via an environment variable."
-            )
+        if not self.base_url:
+            raise ProviderError("Cloud provider requires base_url.")
+        if not self.api_key:
+            raise ProviderError("Cloud provider requires api_key.")
+
+        self.endpoint = _normalize_base_url(self.base_url, "/chat/completions")
 
     def chat(
         self,
@@ -182,48 +148,70 @@ class CloudProvider(BaseProvider):
         max_tokens: int = 512,
     ) -> str:
         payload = {
-            "model":       self.model_id,
-            "messages":    messages,
+            "model": self.model_id,
+            "messages": messages,
             "temperature": temperature,
-            "max_tokens":  max_tokens,
+            "max_tokens": max_tokens,
         }
         headers = {
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
         }
-        data = _post_json(self._endpoint, payload, headers, self._TIMEOUT_S)
+
+        data = _post_json(
+            url=self.endpoint,
+            payload=payload,
+            headers=headers,
+            timeout=self._TIMEOUT_S,
+        )
+
         try:
-            return data["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError) as exc:
-            raise ProviderError(f"Unexpected response shape: {data}") from exc
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(
+                f"Unexpected cloud response shape: {data}"
+            ) from exc
 
+        if not isinstance(content, str):
+            raise ProviderError("Cloud provider returned non-text content.")
 
-# ---------------------------------------------------------------------------
-# LocalProvider  (Ollama)
-# ---------------------------------------------------------------------------
+        return content.strip()
+
 
 class LocalProvider(BaseProvider):
     """
-    Ollama HTTP API provider.
+    Ollama local provider using the HTTP API.
 
-    Uses the /api/chat endpoint which accepts OpenAI-style messages and
-    returns a streaming or single-shot JSON response.
-
-    Non-streaming mode is used (stream: false) for simplicity.
+    Supports local models such as:
+    - phi4-mini:latest
+    - llama3.2:3b
     """
 
     _TIMEOUT_S = 120
+    _SUPPORTED_MODELS = {
+        "phi4-mini:latest",
+        "llama3.2:3b",
+    }
 
     def __init__(
         self,
         model_id: str,
         provider_id: str = "",
-        api_key: str = "",          # unused for local; accepted for API symmetry
         base_url: str = "",
+        api_key: str = "",
     ) -> None:
-        super().__init__(model_id, provider_id, api_key)
-        self._base_url = (base_url or OLLAMA_BASE_URL).rstrip("/")
-        self._endpoint = f"{self._base_url}/api/chat"
+        resolved_base_url = (base_url or OLLAMA_BASE_URL or "").rstrip("/")
+        super().__init__(
+            model_id=model_id,
+            provider_id=provider_id,
+            base_url=resolved_base_url,
+            api_key=api_key,
+        )
+
+        if not self.base_url:
+            raise ProviderError("Local provider requires OLLAMA_BASE_URL.")
+
+        self.endpoint = f"{self.base_url}/api/chat"
 
     def chat(
         self,
@@ -231,125 +219,86 @@ class LocalProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: int = 512,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model":    self.model_id,
+        if self.model_id not in self._SUPPORTED_MODELS:
+            raise ProviderError(
+                f"Unsupported local model: {self.model_id}. "
+                "Supported models are phi4-mini:latest and llama3.2:3b."
+            )
+
+        payload = {
+            "model": self.model_id,
             "messages": messages,
-            "stream":   False,
+            "stream": False,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
             },
         }
         headers = {"Content-Type": "application/json"}
-        data = _post_json(self._endpoint, payload, headers, self._TIMEOUT_S)
+
+        data = _post_json(
+            url=self.endpoint,
+            payload=payload,
+            headers=headers,
+            timeout=self._TIMEOUT_S,
+        )
+
         try:
-            return data["message"]["content"].strip()
+            content = data["message"]["content"]
         except (KeyError, TypeError) as exc:
-            raise ProviderError(f"Unexpected Ollama response: {data}") from exc
+            raise ProviderError(
+                f"Unexpected Ollama response shape: {data}"
+            ) from exc
 
+        if not isinstance(content, str):
+            raise ProviderError("Local provider returned non-text content.")
 
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
+        return content.strip()
+
 
 def build_provider(session_config: dict[str, Any]) -> BaseProvider:
     """
-    Instantiate the correct provider from a session_config dict.
+    Build a provider instance from session_config.
 
-    session_config keys consumed
-    ----------------------------
-    provider_type : "cloud" | "local"
-    provider_id   : stable key (e.g. "llama_scout", "llama3_2_3b")
-    model_id      : full model string forwarded to the API
-    api_key       : bearer token (empty for local)
-    is_local      : bool (alternative branch selector)
-
-    Raises
-    ------
-    ProviderError if provider_type is unrecognised.
+    Expected keys:
+    - provider_type: "local" or "cloud"
+    - provider_id: stable internal id
+    - model_id: actual model string
+    - base_url: required for cloud, optional for local
+    - api_key: required for cloud
+    - is_local: bool
     """
-    ptype       = session_config.get("provider_type", "")
-    is_local    = session_config.get("is_local", False)
-    provider_id = session_config.get("provider_id", "")
-    model_id    = session_config.get("model_id", "")
-    api_key     = session_config.get("api_key", "")
+    config = session_config or {}
 
-    if ptype == "local" or is_local:
+    provider_type = str(config.get("provider_type", "")).strip().lower()
+    provider_id = str(config.get("provider_id", "")).strip()
+    model_id = str(config.get("model_id", "")).strip()
+    base_url = str(config.get("base_url", "")).strip()
+    api_key = str(config.get("api_key", "")).strip()
+    is_local = bool(config.get("is_local", False))
+
+    if provider_type == "local" or is_local:
         return LocalProvider(
             model_id=model_id,
             provider_id=provider_id,
+            base_url=base_url,
+            api_key="",
         )
-    elif ptype == "cloud" or not is_local:
+
+    if provider_type == "cloud":
         return CloudProvider(
             model_id=model_id,
             provider_id=provider_id,
+            base_url=base_url,
             api_key=api_key,
         )
-    else:
-        raise ProviderError(f"Unknown provider_type: {ptype!r}")
 
+    if provider_id in {"phi4_mini", "llama3_2_3b"}:
+        return LocalProvider(
+            model_id=model_id,
+            provider_id=provider_id,
+            base_url=base_url,
+            api_key="",
+        )
 
-# ---------------------------------------------------------------------------
-# Discovery helpers
-# ---------------------------------------------------------------------------
-
-def list_cloud_models() -> list[dict[str, str]]:
-    """
-    Return all configured cloud models as a list of dicts.
-    No network call is made — returns config values only.
-    """
-    return [
-        {"provider_id": pid, "model_id": mid, "provider_type": "cloud"}
-        for pid, mid in CLOUD_PROVIDERS.items()
-    ]
-
-
-def list_local_models(probe: bool = False) -> list[dict[str, str]]:
-    """
-    Return available local models.
-
-    Parameters
-    ----------
-    probe : If True, query Ollama's /api/tags for actually-installed models
-            and merge with the config list. Falls back to config-only on
-            any connection error.
-    """
-    config_models = [
-        {
-            "provider_id":   pid,
-            "model_id":      mid,
-            "provider_type": "local",
-            "installed":     False,
-        }
-        for pid, mid in LOCAL_PROVIDERS.items()
-    ]
-
-    if not probe:
-        return config_models
-
-    try:
-        url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read())
-        installed_names = {m["name"] for m in data.get("models", [])}
-
-        reverse = {v: k for k, v in LOCAL_PROVIDERS.items()}
-        result = []
-        for m in config_models:
-            m["installed"] = m["model_id"] in installed_names
-            result.append(m)
-
-        known_ids = {m["model_id"] for m in config_models}
-        for name in installed_names:
-            if name not in known_ids:
-                result.append({
-                    "provider_id":   reverse.get(name, name),
-                    "model_id":      name,
-                    "provider_type": "local",
-                    "installed":     True,
-                })
-        return result
-
-    except Exception:  # noqa: BLE001
-        return config_models
+    raise ProviderError(f"Unknown provider configuration: {session_config!r}")

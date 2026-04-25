@@ -1,33 +1,10 @@
-"""
-ui/model_setup_page.py — Model / provider selection page for PetChat-2.0.
-
-Flow
-----
-AuthPage  →  ModelSetupPage  →  ChatPage
-
-The user picks Cloud AI or Local AI, selects a model, supplies any required
-API key, then clicks "Start chatting".
-
-Signals
--------
-setup_confirmed(session_config: dict)
-    Emitted when validation passes.  The dict always contains:
-        provider_type : "cloud" | "local"
-        provider_id   : str   (stable key from config.py)
-        model_id      : str   (full model string)
-        is_local      : bool
-        api_key       : str   (empty string for local)
-        user_id       : str   (injected by set_user)
-        username      : str   (injected by set_user)
-"""
+"""Model and mode selection page for PetChat-2.0."""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from PyQt6.QtCore import QSize, Qt, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -35,7 +12,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -45,587 +21,442 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from petchat.config import (
+from src.config import (
     CLOUD_PROVIDERS,
+    DEFAULT_CLOUD_BASE_URL,
     DEFAULT_CLOUD_PROVIDER,
     DEFAULT_LOCAL_PROVIDER,
     ENABLE_CLOUD_MODELS,
     ENABLE_LOCAL_MODELS,
     LOCAL_PROVIDERS,
-    OLLAMA_BASE_URL,
-    THEME_COLORS,
-    get_all_models,
+    MODE_GET_SUPPORT,
+    MODE_HELP_SOMEONE,
 )
+from src.ui.styles import C
 
-
-# ---------------------------------------------------------------------------
-# Background worker: probe Ollama for installed models
-# ---------------------------------------------------------------------------
-
-class _OllamaProbeWorker(QThread):
-    """
-    Runs in a background thread so the UI never blocks while waiting for
-    Ollama's HTTP response.
-    """
-
-    probe_done = pyqtSignal(list, str)   # (model_names: list[str], error: str)
-
-    def run(self) -> None:  # noqa: D102
-        try:
-            import urllib.request, json
-            url = f"{OLLAMA_BASE_URL}/api/tags"
-            with urllib.request.urlopen(url, timeout=4) as resp:
-                data = json.loads(resp.read())
-            names = [m["name"] for m in data.get("models", [])]
-            self.probe_done.emit(names, "")
-        except Exception as exc:  # noqa: BLE001
-            self.probe_done.emit([], str(exc))
-
-
-# ---------------------------------------------------------------------------
-# Toggle card: a styled radio button in a framed card
-# ---------------------------------------------------------------------------
-
-class _ToggleCard(QFrame):
-    """
-    A selectable card that wraps a QRadioButton.
-    Highlights with the yellow accent when checked.
-    """
-
-    def __init__(
-        self,
-        title: str,
-        subtitle: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("toggleCard")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._radio = QRadioButton()
-        self._radio.toggled.connect(self._refresh_style)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(14)
-
-        text_col = QVBoxLayout()
-        text_col.setSpacing(3)
-
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("cardTitle")
-        sub_lbl = QLabel(subtitle)
-        sub_lbl.setObjectName("cardSubtitle")
-
-        text_col.addWidget(title_lbl)
-        text_col.addWidget(sub_lbl)
-
-        layout.addLayout(text_col)
-        layout.addStretch()
-        layout.addWidget(self._radio)
-
-        self._refresh_style(False)
-
-    # Allow clicking anywhere on the card to select it.
-    def mousePressEvent(self, event: Any) -> None:  # noqa: N802
-        self._radio.setChecked(True)
-        super().mousePressEvent(event)
-
-    def radio(self) -> QRadioButton:
-        return self._radio
-
-    def is_checked(self) -> bool:
-        return self._radio.isChecked()
-
-    def _refresh_style(self, checked: bool) -> None:
-        acc = THEME_COLORS["accent"]
-        div = THEME_COLORS["divider"]
-        border = acc if checked else div
-        bg = "#111111" if checked else "#0D0D0D"
-        self.setStyleSheet(
-            f"""
-            QFrame#toggleCard {{
-                background-color: {bg};
-                border: 1.5px solid {border};
-                border-radius: 10px;
-            }}
-            QLabel#cardTitle {{
-                color: {"#FFD54A" if checked else "#F0F0F0"};
-                font-size: 14px;
-                font-weight: 600;
-            }}
-            QLabel#cardSubtitle {{
-                color: {THEME_COLORS["status_text"]};
-                font-size: 12px;
-            }}
-            QRadioButton {{
-                background: transparent;
-            }}
-            QRadioButton::indicator {{
-                width: 18px; height: 18px;
-                border-radius: 9px;
-                border: 2px solid {"#FFD54A" if checked else "#555"};
-                background: {"#FFD54A" if checked else "transparent"};
-            }}
-            """
-        )
-
-
-# ---------------------------------------------------------------------------
-# ModelSetupPage
-# ---------------------------------------------------------------------------
 
 class ModelSetupPage(QWidget):
-    """
-    Provider / model picker page.
-
-    Public API
-    ----------
-    set_user(user_id, username)   — called by MainWindow after login
-    """
-
+    chat_requested = pyqtSignal(str, str, dict)
     setup_confirmed = pyqtSignal(dict)
-
-    # ------------------------------------------------------------------ init
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._user_id   = ""
-        self._username  = ""
-        self._probe_worker: _OllamaProbeWorker | None = None
+        self._user_name = ""
         self._build_ui()
-        self._apply_base_styles()
-        self._on_cloud_toggled(True)    # Cloud shown by default
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def set_user(self, user_id: str, username: str) -> None:
-        self._user_id  = user_id
-        self._username = username
-        self._greeting.setText(f"Hi {username}, choose your AI model.")
-        self._status_label.setText("")
-
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
+        self._apply_styles()
+        self.reset()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(28, 28, 28, 28)
         root.setSpacing(0)
-
-        root.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
-
-        card = QFrame()
-        card.setObjectName("setupCard")
-        card.setFixedWidth(460)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(36, 36, 36, 36)
-        card_layout.setSpacing(18)
-
-        # Header
-        self._greeting = QLabel("Choose your AI model.")
-        self._greeting.setObjectName("setupGreeting")
-        self._greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(self._greeting)
-
-        # Toggle cards
-        toggle_row = QHBoxLayout()
-        toggle_row.setSpacing(12)
-
-        self._cloud_card = _ToggleCard(
-            "Cloud AI",
-            "Fast · requires API key",
-        )
-        self._local_card = _ToggleCard(
-            "Local AI",
-            "Private · requires Ollama",
+        root.addItem(
+            QSpacerItem(
+                20,
+                20,
+                QSizePolicy.Policy.Minimum,
+                QSizePolicy.Policy.Expanding,
+            )
         )
 
-        # Disable cards when provider group is globally disabled.
-        if not ENABLE_CLOUD_MODELS:
-            self._cloud_card.setEnabled(False)
-            self._cloud_card.setToolTip("Cloud models disabled in config")
-        if not ENABLE_LOCAL_MODELS:
-            self._local_card.setEnabled(False)
-            self._local_card.setToolTip("Local models disabled in config")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addItem(
+            QSpacerItem(
+                20,
+                20,
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Minimum,
+            )
+        )
 
-        toggle_row.addWidget(self._cloud_card)
-        toggle_row.addWidget(self._local_card)
-        card_layout.addLayout(toggle_row)
+        self._card = QFrame()
+        self._card.setObjectName("setupCard")
+        self._card.setFixedWidth(520)
+        card_layout = QVBoxLayout(self._card)
+        card_layout.setContentsMargins(28, 28, 28, 28)
+        card_layout.setSpacing(14)
 
-        # Radio group — ensures mutual exclusion
-        self._radio_group = QButtonGroup(self)
-        self._radio_group.addButton(self._cloud_card.radio(), 0)
-        self._radio_group.addButton(self._local_card.radio(), 1)
-        self._cloud_card.radio().setChecked(True)
-        self._radio_group.idToggled.connect(self._on_radio_toggled)
+        self._title = QLabel("Choose how to start")
+        self._title.setObjectName("titleLabel")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self._title)
 
-        # Stacked options panel
-        self._options_stack = QStackedWidget()
-        self._options_stack.addWidget(self._build_cloud_panel())   # index 0
-        self._options_stack.addWidget(self._build_local_panel())   # index 1
-        card_layout.addWidget(self._options_stack)
+        self._subtitle = QLabel("Select the mode and model for this session.")
+        self._subtitle.setObjectName("subtitleLabel")
+        self._subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self._subtitle)
 
-        # Status / error line
+        card_layout.addSpacing(6)
+
+        self._mode_label = QLabel("Mode")
+        self._mode_label.setObjectName("fieldLabel")
+        card_layout.addWidget(self._mode_label)
+
+        self._mode_combo = QComboBox()
+        self._mode_combo.setObjectName("modeCombo")
+        self._mode_combo.addItem("Get Support", MODE_GET_SUPPORT)
+        self._mode_combo.addItem("Help Someone", MODE_HELP_SOMEONE)
+        card_layout.addWidget(self._mode_combo)
+
+        self._provider_label = QLabel("Provider")
+        self._provider_label.setObjectName("fieldLabel")
+        card_layout.addWidget(self._provider_label)
+
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(18)
+
+        self._local_radio = QRadioButton("Local")
+        self._local_radio.setObjectName("providerRadio")
+        self._cloud_radio = QRadioButton("Cloud")
+        self._cloud_radio.setObjectName("providerRadio")
+
+        self._provider_group = QButtonGroup(self)
+        self._provider_group.addButton(self._local_radio, 0)
+        self._provider_group.addButton(self._cloud_radio, 1)
+
+        provider_row.addWidget(self._local_radio)
+        provider_row.addWidget(self._cloud_radio)
+        provider_row.addStretch(1)
+        card_layout.addLayout(provider_row)
+
+        self._provider_group.buttonToggled.connect(self._on_provider_toggled)
+
+        self._provider_stack = QStackedWidget()
+        self._provider_stack.addWidget(self._build_local_panel())
+        self._provider_stack.addWidget(self._build_cloud_panel())
+        card_layout.addWidget(self._provider_stack)
+
         self._status_label = QLabel("")
         self._status_label.setObjectName("statusLabel")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setWordWrap(True)
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_label.hide()
         card_layout.addWidget(self._status_label)
 
-        # Start button
-        self._start_btn = QPushButton("Start chatting")
-        self._start_btn.setObjectName("startBtn")
-        self._start_btn.setFixedHeight(46)
-        self._start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._start_btn.clicked.connect(self._on_start)
-        card_layout.addWidget(self._start_btn)
+        self._start_button = QPushButton("Start Chat")
+        self._start_button.setObjectName("startButton")
+        self._start_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._start_button.setMinimumHeight(46)
+        self._start_button.clicked.connect(self._on_start)
+        card_layout.addWidget(self._start_button)
 
-        # Centre card horizontally
-        h_wrap = QHBoxLayout()
-        h_wrap.addStretch()
-        h_wrap.addWidget(card)
-        h_wrap.addStretch()
-        root.addLayout(h_wrap)
-        root.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
-
-    # ---- Cloud panel -------------------------------------------------
-
-    def _build_cloud_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        layout.addWidget(self._field_label("Model"))
-        self._cloud_combo = QComboBox()
-        self._cloud_combo.setObjectName("setupCombo")
-        for pid, mid in CLOUD_PROVIDERS.items():
-            self._cloud_combo.addItem(mid, userData=pid)
-        # Pre-select default
-        default_idx = self._cloud_combo.findData(DEFAULT_CLOUD_PROVIDER)
-        if default_idx >= 0:
-            self._cloud_combo.setCurrentIndex(default_idx)
-        layout.addWidget(self._cloud_combo)
-
-        layout.addWidget(self._field_label("API Key"))
-        self._api_key_input = QLineEdit()
-        self._api_key_input.setObjectName("setupInput")
-        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key_input.setPlaceholderText("sk-... or paste your key here")
-        # Pre-fill from environment if available
-        env_key = (
-            os.environ.get("GROQ_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-            or ""
+        row.addWidget(self._card)
+        row.addItem(
+            QSpacerItem(
+                20,
+                20,
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Minimum,
+            )
         )
-        self._api_key_input.setText(env_key)
-        layout.addWidget(self._api_key_input)
 
-        return panel
-
-    # ---- Local panel -------------------------------------------------
+        root.addLayout(row)
+        root.addItem(
+            QSpacerItem(
+                20,
+                20,
+                QSizePolicy.Policy.Minimum,
+                QSizePolicy.Policy.Expanding,
+            )
+        )
 
     def _build_local_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        layout.addWidget(self._field_label("Model"))
+        label = QLabel("Local model")
+        label.setObjectName("fieldLabel")
+        layout.addWidget(label)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        self._local_model_combo = QComboBox()
+        self._local_model_combo.setObjectName("panelCombo")
+        for provider_id, model_id in LOCAL_PROVIDERS.items():
+            self._local_model_combo.addItem(model_id, provider_id)
+        default_index = self._local_model_combo.findData(DEFAULT_LOCAL_PROVIDER)
+        if default_index >= 0:
+            self._local_model_combo.setCurrentIndex(default_index)
+        layout.addWidget(self._local_model_combo)
 
-        self._local_combo = QComboBox()
-        self._local_combo.setObjectName("setupCombo")
-        self._populate_local_combo(list(LOCAL_PROVIDERS.keys()))
-        row.addWidget(self._local_combo, stretch=1)
-
-        self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.setObjectName("refreshBtn")
-        self._refresh_btn.setFixedHeight(36)
-        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._refresh_btn.setToolTip("Probe Ollama for installed models")
-        self._refresh_btn.clicked.connect(self._on_refresh_local)
-        row.addWidget(self._refresh_btn)
-
-        layout.addLayout(row)
-
-        ollama_note = QLabel(f"Ollama endpoint: {OLLAMA_BASE_URL}")
-        ollama_note.setObjectName("ollamaNote")
-        layout.addWidget(ollama_note)
+        note = QLabel("Uses your local Ollama server.")
+        note.setObjectName("noteLabel")
+        note.setWordWrap(True)
+        layout.addWidget(note)
 
         return panel
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    def _build_cloud_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
-    @staticmethod
-    def _field_label(text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setObjectName("fieldLabel")
-        return lbl
+        model_label = QLabel("Cloud model")
+        model_label.setObjectName("fieldLabel")
+        layout.addWidget(model_label)
 
-    def _populate_local_combo(self, provider_ids: list[str]) -> None:
-        """Fill local combo from a list of provider_id strings."""
-        self._local_combo.clear()
-        for pid in provider_ids:
-            mid = LOCAL_PROVIDERS.get(pid, pid)
-            self._local_combo.addItem(mid, userData=pid)
-        default_idx = self._local_combo.findData(DEFAULT_LOCAL_PROVIDER)
-        if default_idx >= 0:
-            self._local_combo.setCurrentIndex(default_idx)
+        self._cloud_model_input = QLineEdit()
+        self._cloud_model_input.setObjectName("panelInput")
+        self._cloud_model_input.setPlaceholderText("meta-llama/llama-4-scout-17b-16e-instruct")
+        self._cloud_model_input.setText(CLOUD_PROVIDERS.get(DEFAULT_CLOUD_PROVIDER, ""))
+        layout.addWidget(self._cloud_model_input)
 
-    def _set_status(self, message: str, error: bool = False) -> None:
-        color = "#FF6B6B" if error else THEME_COLORS["status_text"]
-        self._status_label.setStyleSheet(f"color: {color}; font-size: 12px;")
-        self._status_label.setText(message)
+        base_label = QLabel("API base URL")
+        base_label.setObjectName("fieldLabel")
+        layout.addWidget(base_label)
 
-    # ------------------------------------------------------------------
-    # Slots
-    # ------------------------------------------------------------------
+        self._cloud_base_url_input = QLineEdit()
+        self._cloud_base_url_input.setObjectName("panelInput")
+        self._cloud_base_url_input.setPlaceholderText("https://api.openai.com/v1")
+        self._cloud_base_url_input.setText(DEFAULT_CLOUD_BASE_URL)
+        layout.addWidget(self._cloud_base_url_input)
 
-    def _on_radio_toggled(self, btn_id: int, checked: bool) -> None:
-        if not checked:
-            return
-        # btn_id 0 = cloud, 1 = local
-        self._options_stack.setCurrentIndex(btn_id)
-        self._status_label.setText("")
+        key_label = QLabel("API key")
+        key_label.setObjectName("fieldLabel")
+        layout.addWidget(key_label)
 
-    def _on_cloud_toggled(self, checked: bool) -> None:
-        if checked:
-            self._options_stack.setCurrentIndex(0)
+        self._cloud_api_key_input = QLineEdit()
+        self._cloud_api_key_input.setObjectName("panelInput")
+        self._cloud_api_key_input.setPlaceholderText("Paste your API key")
+        self._cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self._cloud_api_key_input)
 
-    def _on_refresh_local(self) -> None:
-        if self._probe_worker and self._probe_worker.isRunning():
-            return
-        self._refresh_btn.setEnabled(False)
-        self._refresh_btn.setText("Probing...")
-        self._set_status("Connecting to Ollama...")
-        self._probe_worker = _OllamaProbeWorker()
-        self._probe_worker.probe_done.connect(self._on_probe_done)
-        self._probe_worker.start()
+        note = QLabel("Use any OpenAI-compatible chat endpoint.")
+        note.setObjectName("noteLabel")
+        note.setWordWrap(True)
+        layout.addWidget(note)
 
-    @pyqtSlot(list, str)
-    def _on_probe_done(self, model_names: list[str], error: str) -> None:
-        self._refresh_btn.setEnabled(True)
-        self._refresh_btn.setText("Refresh")
+        return panel
 
-        if error:
-            self._set_status(f"Ollama not reachable: {error}", error=True)
-            return
-
-        if not model_names:
-            self._set_status("Ollama is running but no models are installed.", error=True)
-            return
-
-        # Populate combo with whatever Ollama actually has installed,
-        # falling back to config provider_id when the name matches.
-        self._local_combo.clear()
-        reverse = {v: k for k, v in LOCAL_PROVIDERS.items()}
-        for name in model_names:
-            pid = reverse.get(name, name)   # use stable id if known, else raw name
-            self._local_combo.addItem(name, userData=pid)
-        self._set_status(f"Found {len(model_names)} model(s) in Ollama.")
-
-    def _on_start(self) -> None:
-        self._status_label.setText("")
-        use_cloud = self._cloud_card.is_checked()
-
-        if use_cloud:
-            session_config = self._build_cloud_config()
-        else:
-            session_config = self._build_local_config()
-
-        if session_config is None:
-            return  # validation failed; status already set
-
-        # Attach user identity so MainWindow can split it out cleanly.
-        session_config["user_id"]  = self._user_id
-        session_config["username"] = self._username
-
-        self._start_btn.setEnabled(False)
-        self._start_btn.setText("Loading...")
-        self.setup_confirmed.emit(session_config)
-
-    # ------------------------------------------------------------------
-    # Config builders (return None on validation failure)
-    # ------------------------------------------------------------------
-
-    def _build_cloud_config(self) -> dict[str, Any] | None:
-        api_key = self._api_key_input.text().strip()
-        if not api_key:
-            self._set_status("Please enter an API key for the cloud model.", error=True)
-            self._api_key_input.setFocus()
-            return None
-
-        pid = self._cloud_combo.currentData()
-        mid = CLOUD_PROVIDERS.get(pid, self._cloud_combo.currentText())
-        return {
-            "provider_type": "cloud",
-            "provider_id":   pid,
-            "model_id":      mid,
-            "is_local":      False,
-            "api_key":       api_key,
-        }
-
-    def _build_local_config(self) -> dict[str, Any] | None:
-        pid = self._local_combo.currentData() or self._local_combo.currentText()
-        mid = LOCAL_PROVIDERS.get(pid, self._local_combo.currentText())
-        if not mid:
-            self._set_status("No local model selected.", error=True)
-            return None
-        return {
-            "provider_type": "local",
-            "provider_id":   pid,
-            "model_id":      mid,
-            "is_local":      True,
-            "api_key":       "",
-        }
-
-    # ------------------------------------------------------------------
-    # Called by MainWindow after setup_confirmed is handled, so the
-    # button resets if the user navigates back via logout.
-    # ------------------------------------------------------------------
-
-    def reset_button(self) -> None:
-        self._start_btn.setEnabled(True)
-        self._start_btn.setText("Start chatting")
-
-    # ------------------------------------------------------------------
-    # Styles
-    # ------------------------------------------------------------------
-
-    def _apply_base_styles(self) -> None:
-        bg  = THEME_COLORS["background"]
-        acc = THEME_COLORS["accent"]
-        inp = THEME_COLORS["input_bg"]
-        txt = THEME_COLORS["bot_bubble_text"]
-        div = THEME_COLORS["divider"]
-        mut = THEME_COLORS["status_text"]
-
+    def _apply_styles(self) -> None:
         self.setStyleSheet(
             f"""
-            ModelSetupPage {{
-                background-color: {bg};
+            QWidget {{
+                background-color: {C.BG};
+                color: {C.TEXT};
             }}
-
             QFrame#setupCard {{
-                background-color: #0D0D0D;
-                border: 1px solid {div};
-                border-radius: 12px;
+                background-color: {C.SURFACE};
+                border: 1px solid {C.DIVIDER};
+                border-radius: 16px;
             }}
-
-            QLabel#setupGreeting {{
-                color: {acc};
-                font-size: 20px;
+            QLabel#titleLabel {{
+                color: {C.ACCENT};
+                font-size: 22px;
                 font-weight: 700;
+                background: transparent;
             }}
-
-            QLabel#fieldLabel {{
-                color: {mut};
-                font-size: 12px;
-                font-weight: 500;
-            }}
-
-            QLabel#ollamaNote {{
-                color: #555555;
-                font-size: 11px;
-                font-style: italic;
-            }}
-
-            QComboBox#setupCombo {{
-                background-color: {inp};
-                color: {txt};
-                border: 1px solid {div};
-                border-radius: 6px;
-                padding: 8px 12px;
+            QLabel#subtitleLabel {{
+                color: {C.MUTED};
                 font-size: 13px;
-                selection-background-color: {acc};
+                background: transparent;
             }}
-
-            QComboBox#setupCombo:focus {{
-                border: 1.5px solid {acc};
+            QLabel#fieldLabel {{
+                color: {C.MUTED};
+                font-size: 12px;
+                font-weight: 600;
+                background: transparent;
             }}
-
-            QComboBox#setupCombo::drop-down {{
+            QLabel#noteLabel {{
+                color: {C.STATUS_TEXT};
+                font-size: 12px;
+                background: transparent;
+            }}
+            QLabel#statusLabel {{
+                color: {C.STATUS_TEXT};
+                font-size: 12px;
+                background: transparent;
+                min-height: 18px;
+            }}
+            QComboBox#modeCombo, QComboBox#panelCombo {{
+                background-color: {C.INPUT_BG};
+                color: {C.INPUT_TEXT};
+                border: 1px solid {C.DIVIDER};
+                border-radius: 12px;
+                padding: 10px 12px;
+                min-height: 18px;
+            }}
+            QComboBox#modeCombo:hover, QComboBox#panelCombo:hover {{
+                border: 1px solid {C.ACCENT};
+            }}
+            QComboBox#modeCombo::drop-down, QComboBox#panelCombo::drop-down {{
                 border: none;
                 width: 24px;
             }}
-
-            QComboBox#setupCombo QAbstractItemView {{
-                background-color: #1A1A1A;
-                color: {txt};
-                selection-background-color: {acc};
-                selection-color: #000000;
-                border: 1px solid {div};
-                outline: none;
+            QComboBox QAbstractItemView {{
+                background-color: {C.SURFACE_ALT};
+                color: {C.TEXT};
+                border: 1px solid {C.DIVIDER};
+                selection-background-color: {C.ACCENT};
+                selection-color: {C.USER_TEXT};
             }}
-
-            QLineEdit#setupInput {{
-                background-color: {inp};
-                color: {txt};
-                border: 1px solid {div};
-                border-radius: 6px;
+            QLineEdit#panelInput {{
+                background-color: {C.INPUT_BG};
+                color: {C.INPUT_TEXT};
+                border: 1px solid {C.DIVIDER};
+                border-radius: 12px;
                 padding: 10px 12px;
+            }}
+            QLineEdit#panelInput:focus {{
+                border: 1px solid {C.ACCENT};
+            }}
+            QRadioButton#providerRadio {{
+                color: {C.TEXT};
+                spacing: 8px;
                 font-size: 13px;
-                selection-background-color: {acc};
-                selection-color: #000000;
             }}
-
-            QLineEdit#setupInput:focus {{
-                border: 1.5px solid {acc};
+            QRadioButton#providerRadio::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border: 1px solid {C.DIVIDER};
+                background: {C.SURFACE_ALT};
             }}
-
-            QPushButton#startBtn {{
-                background-color: {acc};
-                color: #000000;
+            QRadioButton#providerRadio::indicator:checked {{
+                background: {C.ACCENT};
+                border: 1px solid {C.ACCENT};
+            }}
+            QPushButton#startButton {{
+                background-color: {C.ACCENT};
+                color: {C.USER_TEXT};
                 border: none;
-                border-radius: 6px;
-                font-size: 15px;
-                font-weight: 600;
+                border-radius: 12px;
+                padding: 10px 16px;
+                font-size: 14px;
+                font-weight: 700;
             }}
-
-            QPushButton#startBtn:hover {{
-                background-color: #FFE57A;
+            QPushButton#startButton:hover {{
+                background-color: {C.ACCENT_HOVER};
             }}
-
-            QPushButton#startBtn:pressed {{
-                background-color: #F0C030;
-            }}
-
-            QPushButton#startBtn:disabled {{
-                background-color: #555555;
-                color: #999999;
-            }}
-
-            QPushButton#refreshBtn {{
-                background-color: transparent;
-                color: {acc};
-                border: 1.5px solid {acc};
-                border-radius: 6px;
-                padding: 0 14px;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-
-            QPushButton#refreshBtn:hover {{
-                background-color: #1A1600;
-            }}
-
-            QPushButton#refreshBtn:disabled {{
-                color: #555555;
-                border-color: #333333;
-            }}
-
-            QLabel#statusLabel {{
-                min-height: 18px;
-                font-size: 12px;
+            QPushButton#startButton:disabled {{
+                background-color: #3A3A3A;
+                color: #808080;
             }}
             """
         )
+
+    def _on_provider_toggled(self, button: QRadioButton, checked: bool) -> None:
+        if not checked:
+            return
+        if button is self._local_radio:
+            self._provider_stack.setCurrentIndex(0)
+        else:
+            self._provider_stack.setCurrentIndex(1)
+        self._clear_status()
+
+    def _on_start(self) -> None:
+        user_name = self._user_name.strip()
+        if not user_name:
+            self._show_status("Please go back and enter your name first.", error=True)
+            return
+
+        mode = str(self._mode_combo.currentData())
+        session_config = self._build_session_config()
+        if session_config is None:
+            return
+
+        payload = dict(session_config)
+        payload["user_name"] = user_name
+        payload["mode"] = mode
+
+        self._start_button.setEnabled(False)
+        self.chat_requested.emit(user_name, mode, session_config)
+        self.setup_confirmed.emit(payload)
+        self._start_button.setEnabled(True)
+
+    def _build_session_config(self) -> dict[str, Any] | None:
+        if self._local_radio.isChecked():
+            provider_id = str(self._local_model_combo.currentData() or "")
+            model_id = str(self._local_model_combo.currentText()).strip()
+            if not provider_id or not model_id:
+                self._show_status("Please select a local model.", error=True)
+                return None
+            self._clear_status()
+            return {
+                "provider_type": "local",
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "base_url": "",
+                "api_key": "",
+                "is_local": True,
+            }
+
+        model_id = self._cloud_model_input.text().strip()
+        base_url = self._cloud_base_url_input.text().strip().rstrip("/")
+        api_key = self._cloud_api_key_input.text().strip()
+        if not model_id:
+            self._show_status("Please enter a cloud model id.", error=True)
+            self._cloud_model_input.setFocus()
+            return None
+        if not base_url:
+            self._show_status("Please enter the API base URL.", error=True)
+            self._cloud_base_url_input.setFocus()
+            return None
+        if not api_key:
+            self._show_status("Please enter the API key.", error=True)
+            self._cloud_api_key_input.setFocus()
+            return None
+
+        self._clear_status()
+        return {
+            "provider_type": "cloud",
+            "provider_id": "custom_api",
+            "model_id": model_id,
+            "base_url": base_url,
+            "api_key": api_key,
+            "is_local": False,
+        }
+
+    def _show_status(self, message: str, error: bool = False) -> None:
+        color = C.DANGER if error else C.STATUS_TEXT
+        self._status_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; background: transparent;"
+        )
+        self._status_label.setText(message)
+        self._status_label.show()
+
+    def _clear_status(self) -> None:
+        self._status_label.clear()
+        self._status_label.hide()
+
+    def set_user_name(self, user_name: str) -> None:
+        self._user_name = user_name.strip()
+        if self._user_name:
+            self._title.setText(f"Hello {self._user_name}")
+            self._subtitle.setText("Choose a mode and model for this chat.")
+        else:
+            self._title.setText("Choose how to start")
+            self._subtitle.setText("Select the mode and model for this session.")
+        self._clear_status()
+
+    def set_user(self, user_id: str, user_name: str) -> None:
+        _ = user_id
+        self.set_user_name(user_name)
+
+    def reset(self) -> None:
+        self._user_name = ""
+        self._mode_combo.setCurrentIndex(0)
+
+        self._local_radio.setEnabled(ENABLE_LOCAL_MODELS)
+        self._cloud_radio.setEnabled(ENABLE_CLOUD_MODELS)
+
+        if ENABLE_LOCAL_MODELS:
+            self._local_radio.setChecked(True)
+            self._provider_stack.setCurrentIndex(0)
+        elif ENABLE_CLOUD_MODELS:
+            self._cloud_radio.setChecked(True)
+            self._provider_stack.setCurrentIndex(1)
+
+        local_index = self._local_model_combo.findData(DEFAULT_LOCAL_PROVIDER)
+        if local_index >= 0:
+            self._local_model_combo.setCurrentIndex(local_index)
+
+        self._cloud_model_input.setText(CLOUD_PROVIDERS.get(DEFAULT_CLOUD_PROVIDER, ""))
+        self._cloud_base_url_input.setText(DEFAULT_CLOUD_BASE_URL)
+        self._cloud_api_key_input.clear()
+        self._start_button.setEnabled(True)
+        self._clear_status()
+        self.set_user_name("")

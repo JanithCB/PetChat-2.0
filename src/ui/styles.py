@@ -1,345 +1,244 @@
-"""
-ui/styles.py — Centralised QSS palette and style helpers for PetChat-2.0.
-
-All UI modules should import from here instead of hardcoding style strings.
-
-Public API
-----------
-apply_global_styles(app)          — call once in main() after QApplication is created
-get_bubble_style(role)            — "user" | "assistant" | "error"
-PRIMARY_BTN / GHOST_BTN / INPUT   — QSS snippets for common widgets
-C                                 — colour namespace (C.BG, C.ACCENT, …)
-"""
+"""Centralized PyQt6 styling for PetChat-2.0."""
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QFont, QFontDatabase
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QColor, QFont, QPalette
+from PyQt6.QtWidgets import QApplication, QGraphicsDropShadowEffect, QWidget
 
-from petchat.config import THEME_COLORS as _T
+from src.config import THEME_COLORS
 
-
-# ---------------------------------------------------------------------------
-# Colour namespace
-# ---------------------------------------------------------------------------
 
 class C:
-    """Named colour constants — single source of truth for every QSS string."""
-
-    BG            = _T["background"]          # #000000
-    SURFACE       = "#0D0D0D"
-    SURFACE_2     = "#111111"
-    SURFACE_3     = "#1A1A1A"
-    DIVIDER       = _T["divider"]             # #222222
-    BORDER        = "#2E2E2E"
-
-    ACCENT        = _T["accent"]              # #FFD54A
-    ACCENT_HOVER  = "#FFE57A"
-    ACCENT_ACTIVE = "#F0C030"
-
-    USER_BUBBLE   = _T["user_bubble"]         # #FFD54A
-    USER_TEXT     = _T["user_bubble_text"]    # #000000
-    BOT_BUBBLE    = _T["bot_bubble"]          # #1A1A1A
-    BOT_TEXT      = _T["bot_bubble_text"]     # #F0F0F0
-
-    TEXT          = "#F0F0F0"
-    TEXT_MUTED    = _T["status_text"]         # #888888
-    TEXT_FAINT    = "#555555"
-
-    INPUT_BG      = _T["input_bg"]            # #111111
-    ERROR         = "#FF6B6B"
-    SUCCESS       = "#6BCB77"
+    BG = THEME_COLORS["background"]
+    SURFACE = THEME_COLORS["surface"]
+    SURFACE_ALT = THEME_COLORS["surface_alt"]
+    ACCENT = THEME_COLORS["accent"]
+    ACCENT_HOVER = THEME_COLORS["accent_hover"]
+    TEXT = THEME_COLORS["text"]
+    MUTED = THEME_COLORS["muted_text"]
+    DIVIDER = THEME_COLORS["divider"]
+    USER_BUBBLE = THEME_COLORS["user_bubble"]
+    USER_TEXT = THEME_COLORS["user_bubble_text"]
+    BOT_BUBBLE = THEME_COLORS["bot_bubble"]
+    BOT_TEXT = THEME_COLORS["bot_bubble_text"]
+    INPUT_BG = THEME_COLORS["input_bg"]
+    INPUT_TEXT = THEME_COLORS["input_text"]
+    STATUS_TEXT = THEME_COLORS["status_text"]
+    DANGER = THEME_COLORS["danger"]
 
 
-# ---------------------------------------------------------------------------
-# Typography
-# ---------------------------------------------------------------------------
+FONT_FAMILY = "Segoe UI"
+FONT_SIZE_SM = 11
+FONT_SIZE_BASE = 13
+FONT_SIZE_MD = 15
+FONT_SIZE_LG = 20
 
-FONT_FAMILY = "'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
-
-# Point sizes used across the app (keep to 4 levels).
-FONT_SIZE_SM   = 11   # tiny labels, badges
-FONT_SIZE_BASE = 13   # body / inputs
-FONT_SIZE_MD   = 15   # buttons, headings
-FONT_SIZE_LG   = 20   # page titles
-
-
-# ---------------------------------------------------------------------------
-# Reusable QSS snippets
-# ---------------------------------------------------------------------------
-
-# ---- Buttons ---------------------------------------------------------------
 
 PRIMARY_BTN = f"""
-    QPushButton {{
-        background-color: {C.ACCENT};
-        color: {C.USER_TEXT};
-        border: none;
-        border-radius: 6px;
-        font-size: {FONT_SIZE_MD}px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        padding: 0 18px;
-    }}
-    QPushButton:hover  {{ background-color: {C.ACCENT_HOVER};  }}
-    QPushButton:pressed {{ background-color: {C.ACCENT_ACTIVE}; }}
-    QPushButton:disabled {{
-        background-color: #333333;
-        color: #666666;
-    }}
+QPushButton {{
+    background-color: {C.ACCENT};
+    color: {C.USER_TEXT};
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: {FONT_SIZE_BASE}px;
+    font-weight: 600;
+}}
+QPushButton:hover {{ background-color: {C.ACCENT_HOVER}; }}
+QPushButton:pressed {{ background-color: {C.ACCENT_HOVER}; }}
+QPushButton:disabled {{
+    background-color: #343434;
+    color: #777777;
+}}
 """
 
 GHOST_BTN = f"""
-    QPushButton {{
-        background-color: transparent;
-        color: {C.ACCENT};
-        border: 1.5px solid {C.ACCENT};
-        border-radius: 6px;
-        font-size: {FONT_SIZE_BASE}px;
-        font-weight: 600;
-        padding: 0 14px;
-    }}
-    QPushButton:hover  {{ background-color: #1A1600; }}
-    QPushButton:pressed {{ background-color: #2A2200; }}
-    QPushButton:disabled {{
-        color: {C.TEXT_FAINT};
-        border-color: #333333;
-    }}
+QPushButton {{
+    background-color: transparent;
+    color: {C.ACCENT};
+    border: 1px solid {C.ACCENT};
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: {FONT_SIZE_BASE}px;
+    font-weight: 600;
+}}
+QPushButton:hover {{ background-color: #181818; }}
+QPushButton:pressed {{ background-color: #222222; }}
 """
-
-DANGER_BTN = f"""
-    QPushButton {{
-        background-color: transparent;
-        color: {C.ERROR};
-        border: 1px solid #333333;
-        border-radius: 5px;
-        font-size: {FONT_SIZE_SM + 1}px;
-        padding: 0 10px;
-    }}
-    QPushButton:hover  {{ border-color: {C.ERROR}; }}
-    QPushButton:pressed {{ background-color: #1A0000; }}
-"""
-
-# ---- Inputs ----------------------------------------------------------------
 
 INPUT = f"""
-    QLineEdit, QTextEdit {{
-        background-color: {C.INPUT_BG};
-        color: {C.TEXT};
-        border: 1px solid {C.DIVIDER};
-        border-radius: 6px;
-        padding: 10px 12px;
-        font-size: {FONT_SIZE_BASE}px;
-        selection-background-color: {C.ACCENT};
-        selection-color: #000000;
-    }}
-    QLineEdit:focus, QTextEdit:focus {{
-        border: 1.5px solid {C.ACCENT};
-    }}
-    QLineEdit:disabled, QTextEdit:disabled {{
-        background-color: #0A0A0A;
-        color: {C.TEXT_FAINT};
-    }}
+QLineEdit, QTextEdit, QPlainTextEdit {{
+    background-color: {C.INPUT_BG};
+    color: {C.INPUT_TEXT};
+    border: 1px solid {C.DIVIDER};
+    border-radius: 12px;
+    padding: 10px 12px;
+    selection-background-color: {C.ACCENT};
+    selection-color: {C.USER_TEXT};
+}}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
+    border: 1px solid {C.ACCENT};
+}}
 """
-
-# ---- Field label -----------------------------------------------------------
-
-FIELD_LABEL = f"""
-    QLabel {{
-        color: {C.TEXT_MUTED};
-        font-size: {FONT_SIZE_SM}px;
-        font-weight: 500;
-    }}
-"""
-
-# ---- Card / panel ----------------------------------------------------------
-
-CARD = f"""
-    QFrame {{
-        background-color: {C.SURFACE};
-        border: 1px solid {C.DIVIDER};
-        border-radius: 12px;
-    }}
-"""
-
-# ---- Combo box -------------------------------------------------------------
 
 COMBO = f"""
-    QComboBox {{
-        background-color: {C.INPUT_BG};
-        color: {C.TEXT};
-        border: 1px solid {C.DIVIDER};
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-size: {FONT_SIZE_BASE}px;
-        selection-background-color: {C.ACCENT};
-    }}
-    QComboBox:focus {{ border: 1.5px solid {C.ACCENT}; }}
-    QComboBox::drop-down {{ border: none; width: 24px; }}
-    QComboBox QAbstractItemView {{
-        background-color: {C.SURFACE_3};
-        color: {C.TEXT};
-        selection-background-color: {C.ACCENT};
-        selection-color: #000000;
-        border: 1px solid {C.DIVIDER};
-        outline: none;
-    }}
+QComboBox {{
+    background-color: {C.INPUT_BG};
+    color: {C.INPUT_TEXT};
+    border: 1px solid {C.DIVIDER};
+    border-radius: 12px;
+    padding: 10px 12px;
+    min-height: 18px;
+}}
+QComboBox:hover {{ border: 1px solid {C.ACCENT}; }}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {C.SURFACE_ALT};
+    color: {C.TEXT};
+    border: 1px solid {C.DIVIDER};
+    selection-background-color: {C.ACCENT};
+    selection-color: {C.USER_TEXT};
+}}
 """
-
-# ---- Scrollbar (vertical only) ---------------------------------------------
-
-SCROLLBAR = f"""
-    QScrollBar:vertical {{
-        background: {C.BG};
-        width: 6px;
-        border-radius: 3px;
-    }}
-    QScrollBar::handle:vertical {{
-        background: #333333;
-        border-radius: 3px;
-        min-height: 30px;
-    }}
-    QScrollBar::handle:vertical:hover {{ background: {C.ACCENT}; }}
-    QScrollBar::add-line:vertical,
-    QScrollBar::sub-line:vertical {{ height: 0px; }}
-    QScrollBar:horizontal {{ height: 0px; }}
-"""
-
-# ---- Status / error labels -------------------------------------------------
 
 STATUS_LABEL = f"""
-    QLabel {{
-        color: {C.TEXT_MUTED};
-        font-size: {FONT_SIZE_SM}px;
-        font-style: italic;
-    }}
+QLabel {{
+    color: {C.STATUS_TEXT};
+    font-size: {FONT_SIZE_SM}px;
+}}
 """
 
-ERROR_LABEL = f"""
-    QLabel {{
-        color: {C.ERROR};
-        font-size: {FONT_SIZE_SM}px;
-    }}
+CARD = f"""
+QFrame {{
+    background-color: {C.SURFACE};
+    border: 1px solid {C.DIVIDER};
+    border-radius: 14px;
+}}
 """
 
+SCROLLBAR = f"""
+QScrollBar:vertical {{
+    background: transparent;
+    width: 8px;
+    margin: 4px 0 4px 0;
+}}
+QScrollBar::handle:vertical {{
+    background: #383838;
+    border-radius: 4px;
+    min-height: 28px;
+}}
+QScrollBar::handle:vertical:hover {{ background: #4a4a4a; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    height: 0px;
+}}
+"""
 
-# ---------------------------------------------------------------------------
-# Chat bubble styles
-# ---------------------------------------------------------------------------
 
 def get_bubble_style(role: str) -> str:
-    """
-    Return a QSS string for a chat bubble QLabel.
-
-    Parameters
-    ----------
-    role : "user" | "assistant" | "error"
-    """
     if role == "user":
-        bg, fg  = C.USER_BUBBLE, C.USER_TEXT
-        radius  = "18px 18px 4px 18px"
-        border  = "none"
+        background = C.USER_BUBBLE
+        foreground = C.USER_TEXT
+        border = "none"
     elif role == "error":
-        bg, fg  = "#1A0000", C.ERROR
-        radius  = "18px 18px 18px 4px"
-        border  = f"1px solid {C.ERROR}"
-    else:  # "assistant"
-        bg, fg  = C.BOT_BUBBLE, C.BOT_TEXT
-        radius  = "18px 18px 18px 4px"
-        border  = f"1px solid {C.DIVIDER}"
+        background = "#1B1010"
+        foreground = C.DANGER
+        border = f"1px solid {C.DANGER}"
+    else:
+        background = C.BOT_BUBBLE
+        foreground = C.BOT_TEXT
+        border = f"1px solid {C.DIVIDER}"
 
     return f"""
-        QLabel {{
-            background-color: {bg};
-            color: {fg};
-            border: {border};
-            border-radius: {radius};
-            padding: 10px 14px;
-            font-size: {FONT_SIZE_BASE + 1}px;
-            line-height: 1.5;
-        }}
+    QLabel {{
+        background-color: {background};
+        color: {foreground};
+        border: {border};
+        border-radius: 16px;
+        padding: 10px 14px;
+        font-size: {FONT_SIZE_BASE}px;
+    }}
     """
 
 
-# ---------------------------------------------------------------------------
-# Global application stylesheet
-# ---------------------------------------------------------------------------
+def make_bubble_shadow(
+    widget: QWidget,
+    blur_radius: float = 18.0,
+    y_offset: float = 2.0,
+) -> QGraphicsDropShadowEffect:
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur_radius)
+    effect.setOffset(0.0, y_offset)
+    effect.setColor(QColor(0, 0, 0, 110))
+    return effect
+
+
+def apply_bubble_shadow(
+    widget: QWidget,
+    blur_radius: float = 18.0,
+    y_offset: float = 2.0,
+) -> None:
+    widget.setGraphicsEffect(
+        make_bubble_shadow(widget, blur_radius=blur_radius, y_offset=y_offset)
+    )
+
 
 _GLOBAL_QSS = f"""
-    /* ── Base ── */
-    QWidget {{
-        background-color: {C.BG};
-        color: {C.TEXT};
-        font-family: {FONT_FAMILY};
-        font-size: {FONT_SIZE_BASE}px;
-    }}
-
-    /* ── Inputs ── */
-    {INPUT}
-
-    /* ── Combo ── */
-    {COMBO}
-
-    /* ── Scrollbars ── */
-    {SCROLLBAR}
-
-    /* ── Tooltip ── */
-    QToolTip {{
-        background-color: {C.SURFACE_3};
-        color: {C.TEXT};
-        border: 1px solid {C.BORDER};
-        border-radius: 4px;
-        padding: 4px 8px;
-        font-size: {FONT_SIZE_SM}px;
-    }}
-
-    /* ── Menu ── */
-    QMenu {{
-        background-color: {C.SURFACE_2};
-        color: {C.TEXT};
-        border: 1px solid {C.DIVIDER};
-        border-radius: 6px;
-        padding: 4px 0;
-    }}
-    QMenu::item {{ padding: 6px 24px; }}
-    QMenu::item:selected {{ background-color: {C.ACCENT}; color: #000000; }}
-    QMenu::separator {{
-        height: 1px;
-        background: {C.DIVIDER};
-        margin: 4px 0;
-    }}
-
-    /* ── Message box ── */
-    QMessageBox {{
-        background-color: {C.SURFACE};
-    }}
-    QMessageBox QLabel {{
-        color: {C.TEXT};
-        font-size: {FONT_SIZE_BASE}px;
-    }}
-    QMessageBox QPushButton {{
-        {PRIMARY_BTN}
-        min-width: 80px;
-        min-height: 32px;
-    }}
+QWidget {{
+    background-color: {C.BG};
+    color: {C.TEXT};
+    font-family: '{FONT_FAMILY}';
+    font-size: {FONT_SIZE_BASE}px;
+}}
+QMainWindow, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{
+    background-color: {C.BG};
+}}
+QLabel {{
+    color: {C.TEXT};
+    background: transparent;
+}}
+{INPUT}
+{COMBO}
+{SCROLLBAR}
+QPushButton:focus, QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    outline: none;
+}}
+QToolTip {{
+    background-color: {C.SURFACE_ALT};
+    color: {C.TEXT};
+    border: 1px solid {C.DIVIDER};
+    padding: 6px 8px;
+}}
 """
+
+
+def apply_app_style(app: QApplication) -> None:
+    font = QFont(FONT_FAMILY, FONT_SIZE_BASE)
+    app.setFont(font)
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(C.BG))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(C.TEXT))
+    palette.setColor(QPalette.ColorRole.Base, QColor(C.INPUT_BG))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(C.SURFACE_ALT))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(C.SURFACE_ALT))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(C.TEXT))
+    palette.setColor(QPalette.ColorRole.Text, QColor(C.TEXT))
+    palette.setColor(QPalette.ColorRole.Button, QColor(C.SURFACE))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(C.TEXT))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(C.ACCENT))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(C.USER_TEXT))
+    app.setPalette(palette)
+    app.setStyleSheet(_GLOBAL_QSS)
 
 
 def apply_global_styles(app: QApplication) -> None:
-    """
-    Apply the global QSS palette to a QApplication instance.
-    Call once in main(), right after QApplication is created.
-
-    Example
-    -------
-    app = QApplication(sys.argv)
-    apply_global_styles(app)
-    """
-    # Set a clean default font (system-native if custom fonts aren't bundled).
-    font = QFont()
-    font.setFamily("Segoe UI")
-    font.setPointSize(FONT_SIZE_BASE)
-    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-    app.setFont(font)
-
-    app.setStyleSheet(_GLOBAL_QSS)
+    apply_app_style(app)

@@ -1,194 +1,194 @@
-"""
-ui/main_window.py — Top-level application window for PetChat-2.0.
-
-Manages a QStackedWidget with three pages:
-    0 — AuthPage        (login / signup)
-    1 — ModelSetupPage  (cloud vs local, model picker)
-    2 — ChatPage        (WhatsApp-style chat)
-
-Navigation always flows forward:  Auth → ModelSetup → Chat.
-show_login() is also available so the logout path can reset the stack.
-"""
+"""Main application window for PetChat-2.0."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QCloseEvent, QIcon
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 
-from petchat.config import APP_NAME, APP_VERSION, THEME_COLORS
-from petchat.ui.auth_page import AuthPage
-from petchat.ui.chat_page import ChatPage
-from petchat.ui.model_setup_page import ModelSetupPage
+from src.config import APP_NAME, APP_VERSION, DEFAULT_MODE, THEME_COLORS
+from src.ui.auth_page import AuthPage
+from src.ui.chat_page import ChatPage
+from src.ui.model_setup_page import ModelSetupPage
 
 
-# ---------------------------------------------------------------------------
-# Page indices — use these constants instead of raw ints everywhere.
-# ---------------------------------------------------------------------------
-
-_PAGE_AUTH        = 0
+_PAGE_AUTH = 0
 _PAGE_MODEL_SETUP = 1
-_PAGE_CHAT        = 2
+_PAGE_CHAT = 2
 
 
 class MainWindow(QMainWindow):
-    """
-    Root window.  Owns the page stack and routes signals between pages.
-
-    Lifecycle
-    ---------
-    1.  App starts  → show_login()  (AuthPage visible)
-    2.  Login OK    → show_model_setup(user_id, username)
-    3.  Model OK    → show_chat(session_config, user)
-    4.  Logout      → show_login()  (stack fully reset)
-    """
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._user_name: str = ""
+        self._session_config: dict[str, Any] = {}
+        self._current_mode: str = DEFAULT_MODE
 
         self._setup_window()
-
-        # Central stacked widget — pages are added in fixed order.
-        self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
-
-        # Instantiate all three pages once; they are hidden until needed.
-        self._auth_page        = AuthPage()
-        self._model_setup_page = ModelSetupPage()
-        self._chat_page        = ChatPage()
-
-        self._stack.insertWidget(_PAGE_AUTH,        self._auth_page)
-        self._stack.insertWidget(_PAGE_MODEL_SETUP, self._model_setup_page)
-        self._stack.insertWidget(_PAGE_CHAT,        self._chat_page)
-
+        self._build_stack()
         self._wire_signals()
-
-        # Start on the login page.
-        self.show_login()
-
-    # ------------------------------------------------------------------
-    # Window setup
-    # ------------------------------------------------------------------
+        self.go_to_auth()
 
     def _setup_window(self) -> None:
-        self.setWindowTitle(f"{APP_NAME}  {APP_VERSION}")
-        self.setMinimumSize(760, 600)
-        self.resize(900, 680)
-        self._apply_base_style()
-
-    def _apply_base_style(self) -> None:
-        bg  = THEME_COLORS["background"]
-        acc = THEME_COLORS["accent"]
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setMinimumSize(860, 640)
+        self.resize(980, 760)
         self.setStyleSheet(
             f"""
-            QMainWindow, QWidget {{
-                background-color: {bg};
-                color: {THEME_COLORS["bot_bubble_text"]};
-                font-family: 'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
-                font-size: 14px;
-            }}
-            QScrollBar:vertical {{
-                background: {bg};
-                width: 6px;
-                border-radius: 3px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #333333;
-                border-radius: 3px;
-                min-height: 30px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {acc};
-            }}
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar:horizontal {{
-                height: 0px;
+            QMainWindow {{
+                background-color: {THEME_COLORS['background']};
+                color: {THEME_COLORS['text']};
             }}
             """
         )
 
-    # ------------------------------------------------------------------
-    # Signal wiring
-    # ------------------------------------------------------------------
+    def _build_stack(self) -> None:
+        self._stack = QStackedWidget(self)
+        self.setCentralWidget(self._stack)
+
+        self._auth_page = AuthPage()
+        self._model_setup_page = ModelSetupPage()
+        self._chat_page = ChatPage()
+
+        self._stack.addWidget(self._auth_page)
+        self._stack.addWidget(self._model_setup_page)
+        self._stack.addWidget(self._chat_page)
 
     def _wire_signals(self) -> None:
-        """Connect child-page signals to navigation slots."""
-
-        # AuthPage emits login_successful(user_id: str, username: str)
-        self._auth_page.login_successful.connect(self._on_login_successful)
-
-        # ModelSetupPage emits setup_confirmed(session_config: dict)
-        self._model_setup_page.setup_confirmed.connect(self._on_model_setup_confirmed)
-
-        # ChatPage emits logout_requested()
-        self._chat_page.logout_requested.connect(self.show_login)
-
-    # ------------------------------------------------------------------
-    # Internal slots
-    # ------------------------------------------------------------------
-
-    def _on_login_successful(self, user_id: str, username: str) -> None:
-        self.show_model_setup(user_id, username)
-
-    def _on_model_setup_confirmed(self, session_config: dict[str, Any]) -> None:
-        # ModelSetupPage must attach user info to session_config before emitting.
-        user = {
-            "user_id":  session_config.pop("user_id",  ""),
-            "username": session_config.pop("username", ""),
-        }
-        self.show_chat(session_config, user)
-
-    # ------------------------------------------------------------------
-    # Public navigation helpers
-    # ------------------------------------------------------------------
-
-    def show_login(self) -> None:
-        """Reset to the authentication page (also used for logout)."""
-        self._auth_page.reset()
-        self._stack.setCurrentIndex(_PAGE_AUTH)
-        self.setWindowTitle(f"{APP_NAME}  {APP_VERSION}")
-
-    def show_model_setup(self, user_id: str, username: str) -> None:
-        """Switch to the model-selection page, injecting user context."""
-        self._model_setup_page.set_user(user_id, username)
-        self._stack.setCurrentIndex(_PAGE_MODEL_SETUP)
-        self.setWindowTitle(f"{APP_NAME}  —  Choose your model")
-
-    def show_chat(
-        self,
-        session_config: dict[str, Any],
-        user: dict[str, str],
-    ) -> None:
-        """
-        Initialise and switch to ChatPage.
-
-        Parameters
-        ----------
-        session_config:
-            Dict produced by ModelSetupPage; must contain at minimum:
-                provider_id : str   — stable provider key from config.py
-                model_id    : str   — full model string
-                is_local    : bool  — True for Ollama, False for cloud
-        user:
-            Dict with 'user_id' and 'username'.
-        """
-        self._chat_page.start_session(session_config, user)
-        self._stack.setCurrentIndex(_PAGE_CHAT)
-        username = user.get("username", "")
-        self.setWindowTitle(
-            f"{APP_NAME}  —  {username}" if username else APP_NAME
+        self._connect_if_present(
+            self._auth_page,
+            "login_completed",
+            self._handle_login_completed,
+        )
+        self._connect_if_present(
+            self._auth_page,
+            "login_successful",
+            self._handle_legacy_login_successful,
         )
 
-    # ------------------------------------------------------------------
-    # Qt overrides
-    # ------------------------------------------------------------------
+        self._connect_if_present(
+            self._model_setup_page,
+            "chat_requested",
+            self._handle_chat_requested,
+        )
+        self._connect_if_present(
+            self._model_setup_page,
+            "setup_confirmed",
+            self._handle_legacy_setup_confirmed,
+        )
+
+        self._connect_if_present(
+            self._chat_page,
+            "logout_requested",
+            self.go_to_auth,
+        )
+        self._connect_if_present(
+            self._chat_page,
+            "back_requested",
+            self._back_to_model_setup,
+        )
+
+    @staticmethod
+    def _connect_if_present(obj: object, signal_name: str, slot: Any) -> None:
+        signal = getattr(obj, signal_name, None)
+        if signal is not None and hasattr(signal, "connect"):
+            signal.connect(slot)
+
+    def _handle_login_completed(self, user_name: str) -> None:
+        self.go_to_model_setup(user_name)
+
+    def _handle_legacy_login_successful(self, user_id: str, user_name: str) -> None:
+        _ = user_id
+        self.go_to_model_setup(user_name)
+
+    def _handle_chat_requested(
+        self,
+        user_name: str,
+        mode: str,
+        session_config: dict[str, Any],
+    ) -> None:
+        self.start_chat(user_name, session_config, mode)
+
+    def _handle_legacy_setup_confirmed(self, session_config: dict[str, Any]) -> None:
+        user_name = str(
+            session_config.pop("user_name", "")
+            or session_config.pop("username", "")
+            or self._user_name
+        )
+        initial_mode = str(session_config.pop("mode", self._current_mode or DEFAULT_MODE))
+        self.start_chat(user_name, session_config, initial_mode)
+
+    def _back_to_model_setup(self) -> None:
+        self.go_to_model_setup(self._user_name)
+
+    def go_to_auth(self) -> None:
+        self._user_name = ""
+        self._session_config = {}
+        self._current_mode = DEFAULT_MODE
+
+        if hasattr(self._auth_page, "reset"):
+            self._auth_page.reset()
+        if hasattr(self._model_setup_page, "reset"):
+            self._model_setup_page.reset()
+        if hasattr(self._chat_page, "reset_session"):
+            self._chat_page.reset_session()
+
+        self._stack.setCurrentIndex(_PAGE_AUTH)
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+
+    def go_to_model_setup(self, user_name: str) -> None:
+        self._user_name = user_name.strip()
+
+        if hasattr(self._model_setup_page, "set_user_name"):
+            self._model_setup_page.set_user_name(self._user_name)
+        elif hasattr(self._model_setup_page, "set_user"):
+            try:
+                self._model_setup_page.set_user(self._user_name)
+            except TypeError:
+                self._model_setup_page.set_user("", self._user_name)
+
+        self._stack.setCurrentIndex(_PAGE_MODEL_SETUP)
+        suffix = f" - {self._user_name}" if self._user_name else ""
+        self.setWindowTitle(f"{APP_NAME} - Model Setup{suffix}")
+
+    def start_chat(
+        self,
+        user_name: str,
+        session_config: dict[str, Any],
+        initial_mode: str,
+    ) -> None:
+        self._user_name = user_name.strip()
+        self._session_config = dict(session_config)
+        self._current_mode = initial_mode or DEFAULT_MODE
+
+        if hasattr(self._chat_page, "start_session"):
+            try:
+                self._chat_page.start_session(
+                    user_name=self._user_name,
+                    mode=self._current_mode,
+                    session_config=self._session_config,
+                )
+            except TypeError:
+                try:
+                    self._chat_page.start_session(
+                        self._user_name,
+                        self._current_mode,
+                        self._session_config,
+                    )
+                except TypeError:
+                    user_info = {
+                        "user_name": self._user_name,
+                        "user_id": self._user_name.lower().replace(" ", "_") or "user",
+                        "session_id": "desktop_session",
+                    }
+                    self._chat_page.start_session(self._session_config, user_info)
+
+        self._stack.setCurrentIndex(_PAGE_CHAT)
+        title_user = self._user_name or "Chat"
+        self.setWindowTitle(f"{APP_NAME} - {title_user}")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Cleanly shut down the chat pipeline before the window closes."""
-        self._chat_page.shutdown()
+        if hasattr(self._chat_page, "shutdown"):
+            self._chat_page.shutdown()
         event.accept()
