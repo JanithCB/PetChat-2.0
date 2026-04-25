@@ -1,116 +1,183 @@
-# Emotional Companion
+# PetChat 2.0
 
-A desktop AI emotional-support chatbot built with Python, PyQt6, Groq, and local RAG.
-
-This project is designed to feel more like a caring friend than a generic chatbot. It combines empathetic prompting, a friend-style response rewrite layer, safety checks for high-risk messages, and retrieval from a small mental-health support knowledge base.
+PetChat 2.0 is a desktop AI emotional-support chatbot built with Python and PyQt6. It is designed to feel more like a calm, caring companion than a generic chatbot, while supporting both local and cloud language models, local RAG, and a future-ready Supabase memory layer.
 
 ---
 
 ## Features
 
-- Desktop chat application built with PyQt6
-- Emotional companion style responses
-- Local RAG with FAISS + SentenceTransformers
-- Friend-style response rewriting for more natural replies
-- Safety detection for high-risk or self-harm related messages
-- Cached document indexing for faster startup
-- PowerShell-friendly testing workflow
+- Desktop chat app built with PyQt6
+- Two conversation modes:
+  - Get Support
+  - Help Someone
+- Local models through Ollama
+- Cloud models through OpenAI-compatible APIs
+- Local RAG over `cleaned_txt/`
+- Safety-aware response flow for higher-risk messages
+- Warm friend-style prompting and rewrite layer
+- Minimal Supabase integration for future conversation memory
+- Simple multi-screen UI:
+  - Auth
+  - Model Setup
+  - Chat
 
 ---
 
 ## Project Goal
 
-The goal of this project is to build a more emotionally supportive chatbot that feels warm, natural, and present during difficult conversations.
+The goal of PetChat 2.0 is to create a more emotionally supportive chatbot that feels warm, steady, and practical during difficult conversations.
 
-Instead of replying like a generic assistant, the chatbot is designed to:
-- sound softer and more human
-- avoid robotic therapy-style language
-- stay grounded in helpful mental-health support documents
-- respond more safely in crisis-like situations
+Instead of sounding robotic or overly clinical, the assistant is designed to:
+- respond in a softer and more natural tone
+- avoid diagnosis and therapist-like language
+- handle emotional support more safely
+- use retrieved wellbeing content when helpful
+- support both people seeking help and people helping someone else
+
+---
+
+## Modes
+
+### Get Support
+This mode is for users talking about their own feelings, stress, anxiety, loneliness, or emotional struggles.
+
+The system focuses on:
+- empathy first
+- gentle follow-up
+- calm emotional support
+- minimal advice overload
+
+### Help Someone
+This mode is for users who want help supporting a friend, partner, family member, or someone else.
+
+The system focuses on:
+- how to respond supportively
+- what practical steps to suggest
+- when to encourage professional help
+- using RAG more often for grounded support guidance
 
 ---
 
 ## Tech Stack
 
-- Python 3.13
+- Python 3
 - PyQt6
-- Groq API
-- SentenceTransformers
+- Ollama
+- OpenAI-compatible cloud APIs
 - FAISS
-- JSON-based local data storage
+- NumPy
+- Supabase Python client
+- python-dotenv
 
 ---
 
-## Project Structure
+## Current Project Structure
 
 ```text
-emotional-companion/
-├── app.py
-├── prompts.py
-├── rag_engine.py
-├── safety.py
-├── requirements.txt
-├── README.md
+PetChat-2.0/
+├── .venv/
+├── cleaned_txt/
 ├── data/
-│   ├── users.json
-│   └── rag_cache/
-└── evals/
-    ├── eval_prompts.json
-    └── quick_eval.py
+├── documents/
+├── src/
+│   ├── __init__.py
+│   ├── app.py
+│   ├── config.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── pipeline.py
+│   │   ├── prompts.py
+│   │   ├── providers.py
+│   │   └── safety.py
+│   ├── eval/
+│   │   ├── __init__.py
+│   │   ├── eval_prompts.json
+│   │   └── quick_eval.py
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── conversation_store.py
+│   │   └── supabase_client.py
+│   ├── rag/
+│   │   ├── __init__.py
+│   │   ├── rag_engine.py
+│   │   └── retriever.py
+│   └── ui/
+│       ├── __init__.py
+│       ├── auth_page.py
+│       ├── chat_page.py
+│       ├── main_window.py
+│       ├── model_setup_page.py
+│       └── styles.py
+├── .env
+├── .gitignore
+├── README.md
+└── requirements.txt
 ```
 
-### File Overview
+---
 
-- `app.py`  
-  Main desktop application UI and chat flow.
+## Core Flow
 
-- `prompts.py`  
-  Stores the main system prompt, friend-style examples, and rewrite prompt builder.
+### 1. User starts the app
+The desktop app opens with a simple UI flow:
+- Auth page
+- Model setup page
+- Chat page
 
-- `rag_engine.py`  
-  Handles document loading, chunking, embeddings, FAISS indexing, caching, and retrieval.
+### 2. Mode and model are selected
+The user chooses:
+- Get Support or Help Someone
+- Local or cloud model
 
-- `safety.py`  
-  Detects high-risk language and returns a safety-first response.
+### 3. Safety check runs first
+Each user message is checked for higher-risk language before normal generation continues.
 
-- `evals/quick_eval.py`  
-  Runs quick retrieval checks using sample emotional prompts.
+### 4. RAG is used when appropriate
+Local RAG searches the `cleaned_txt/` wellbeing documents when support context is useful, especially in Help Someone mode.
+
+### 5. Draft response is generated
+The selected model creates a first response using:
+- system instructions
+- example style turns
+- recent history
+- optional RAG context
+
+### 6. Reply is rewritten into final style
+A rewrite step makes the response sound warmer, shorter, and more natural for chat.
 
 ---
 
-## How It Works
+## Configuration
 
-### 1. User sends a message
-The desktop app receives the user input and passes it into the response pipeline.
+Main configuration lives in:
 
-### 2. Safety check runs first
-If the message contains high-risk self-harm or suicide-related language, the chatbot returns a safety-first reply instead of continuing normal generation.
+```text
+src/config.py
+```
 
-### 3. RAG retrieves support context
-If the message is not high-risk, the local RAG engine searches the emotional-support documents and retrieves the most relevant chunks.
+Typical settings include:
+- local model options
+- cloud provider settings
+- RAG feature flags
+- Supabase feature flags
+- UI constants
+- root paths for `cleaned_txt/` and cache directories
 
-### 4. Main response is generated
-The main model creates a helpful draft response using:
-- the conversation history
-- the system prompt
-- the retrieved RAG context when useful
+Environment variables are stored in:
 
-### 5. Reply is rewritten into friend style
-A second prompt rewrites the draft into a warmer, shorter, more natural emotional-support reply.
+```text
+.env
+```
 
----
+Example:
 
-## Documents Used for RAG
-
-This project uses a small curated set of emotional-support and self-help documents in `.txt` format.
-
-Example sources:
-- WHO stress and grounding guide
-- CBT workbook material
-- anxiety and depression self-help content
-- local crisis or mental health helpline information
-
-The RAG system is intentionally kept small and curated to improve retrieval quality and reduce noisy results.
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+RAG_ENABLED=true
+USE_SUPABASE_MEMORY=true
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_KEY=your_service_role_key
+```
 
 ---
 
@@ -119,27 +186,36 @@ The RAG system is intentionally kept small and curated to improve retrieval qual
 ### 1. Open the project folder
 
 ```powershell
-cd "D:\HND NIBM\PetChat-2.0\emotional-companion"
+cd "D:\HND NIBM\PetChat-2.0"
 ```
 
-### 2. Install dependencies
+### 2. Create and activate the virtual environment
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Add your API key
-
-Set your Groq API key in PowerShell before running the app:
+### 3. Install dependencies
 
 ```powershell
-$env:GROQ_API_KEY="your_api_key_here"
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-If your code later uses Gemini directly, you can also set:
+### 4. Start Ollama
 
 ```powershell
-$env:GEMINI_API_KEY="your_api_key_here"
+ollama serve
+```
+
+In another terminal, pull the required models if needed:
+
+```powershell
+ollama pull phi4-mini:latest
+ollama pull llama3.2:3b
+ollama pull nomic-embed-text
 ```
 
 ---
@@ -149,117 +225,87 @@ $env:GEMINI_API_KEY="your_api_key_here"
 ### Launch the desktop app
 
 ```powershell
-python app.py
+python -m src.app
 ```
 
-### Run RAG test directly
+### Run CLI mode
 
 ```powershell
-python rag_engine.py
+python -m src.app --cli --model phi4-mini:latest
 ```
 
-### Run quick eval checks
+### Run without RAG
 
 ```powershell
-python .\evals\quick_eval.py
+python -m src.app --no-rag
 ```
 
 ---
 
-## PowerShell Verification Checks
+## Supabase Setup
 
-Use these commands to confirm the new implementations are working.
+PetChat 2.0 includes a minimal Supabase memory layer for storing conversation history.
 
-### Check imports
+Current memory support includes:
+- lazy client setup
+- saving messages
+- loading recent history
 
-```powershell
-python -c "import prompts, safety, rag_engine; print('imports ok')"
-```
+Supabase is optional. If it is disabled or not configured, memory functions fall back safely without crashing the app.
 
-### Check prompt system
-
-```powershell
-python -c "from prompts import SYSTEM_PROMPT, build_rewrite_prompt; print('SYSTEM OK' if SYSTEM_PROMPT else 'SYSTEM MISSING'); print(build_rewrite_prompt('I feel alone', 'That sounds difficult.')[:300])"
-```
-
-### Check safety detection
-
-```powershell
-python -c "from safety import detect_risk_level; print(detect_risk_level('I want to die')); print(detect_risk_level('I hate myself')); print(detect_risk_level('I had a bad day'))"
-```
-
-Expected output:
-
-```text
-high
-moderate
-none
-```
-
-### Check RAG retrieval
-
-```powershell
-python -c "from rag_engine import build_rag_context; print(build_rag_context('I feel overwhelmed and need grounding')[:1200])"
-```
-
----
-
-## Current Improvements
-
-Today’s work added:
-
-- a stronger prompt architecture
-- friend-style response examples
-- a rewrite layer for making replies sound more human
-- a dedicated safety module
-- local retrieval testing
-- project cleanup for PowerShell-based debugging
-
-These changes make the chatbot feel less robotic and more emotionally supportive.
+Tables are expected to be created manually in the Supabase SQL Editor.
 
 ---
 
 ## Safety Note
 
-This project is an emotional-support companion, not a therapist, doctor, or emergency service.
+PetChat 2.0 is an emotional-support companion, not a therapist, doctor, or emergency service.
 
 It should not:
 - diagnose mental illness
-- replace professional support
-- give medical advice
-- act as the only source of help in crisis situations
+- replace professional care
+- provide medical advice
+- act as the only source of help in a crisis
 
-For high-risk or crisis-related messages, the app should encourage real-world support such as trusted people, emergency services, or crisis helplines.
-
-Sri Lanka mental health support example:
-- National Mental Health Helpline: 1926
+For higher-risk situations, the app should guide the user toward trusted people, crisis support, or emergency services.
 
 ---
 
-## Known Issues
+## Current Status
 
-- The Hugging Face warning about unauthenticated requests is not a failure; it only affects rate limits for downloads.
-- The `embeddings.position_ids | UNEXPECTED` message can appear when loading the embedding model and is usually harmless if the model still loads correctly.
-- RAG retrieval for loneliness-related prompts may still need tuning for better emotional relevance.
+Current implementation work includes:
+- UI screens through the chat page
+- prompt system
+- provider abstraction
+- safety module
+- chat pipeline
+- local RAG engine
+- minimal Supabase client and conversation store
+
+The architecture is set up so future work can expand:
+- memory
+- evaluation
+- emotion classification
+- UI polish
+- richer support planning
 
 ---
 
 ## Future Improvements
 
-- Better loneliness-specific retrieval
-- More friend-style training examples
-- Better crisis escalation flow
-- Chat memory improvements
-- Better UI polish and message streaming
-- Optional mood journaling
-- Optional voice features
+- Better conversation memory integration
+- More polished chat pacing and streaming
+- Better retrieval tuning for emotional support
+- Stronger guided-help prompting
+- Emotion classification
+- Richer evaluation workflows
+- Better Supabase-backed long-term memory
+- Optional journaling or mood tracking
 
 ---
 
-## Author Notes
+## Author Note
 
-This project is being built as a focused emotional companion chatbot that feels more human, more supportive, and more specific than many generic chatbots.
+PetChat 2.0 is being built as a focused emotional companion that feels warmer, steadier, and more human than a generic assistant.
 
-The aim is not just to build another chatbot, but to build one that can respond with warmth, steadiness, and better emotional presence.
-
----
+The aim is not just to build another chatbot, but to build one that can support difficult conversations with more care, emotional presence, and practical structure.
