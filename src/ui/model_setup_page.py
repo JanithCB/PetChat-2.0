@@ -1,12 +1,4 @@
-"""Model and mode selection page for PetChat-2.0.
-
-Redesigned desktop layout:
-- wider two-column setup panel
-- readable color hierarchy
-- no overlapping text
-- consistent card spacing
-- scroll-safe content for small screens
-"""
+"""Compact model and mode selection page for PetChat-2.0."""
 
 from __future__ import annotations
 
@@ -16,11 +8,11 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -41,7 +33,8 @@ from src.config import (
 from src.ui.styles import C, apply_card_shadow
 
 
-SETUP_MAX_WIDTH = 1040
+SETUP_MAX_WIDTH = 820
+SETUP_MIN_WIDTH = 680
 
 
 class ModelSetupPage(QWidget):
@@ -66,89 +59,56 @@ class ModelSetupPage(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(0)
+        root.addStretch(1)
 
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setObjectName("setupScroll")
-        root.addWidget(self._scroll)
-
-        page = QWidget()
-        page.setObjectName("setupPage")
-        self._scroll.setWidget(page)
-
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(32, 32, 32, 32)
-        page_layout.setSpacing(0)
-        page_layout.addStretch(1)
-
-        center_row = QHBoxLayout()
-        center_row.setContentsMargins(0, 0, 0, 0)
-        center_row.setSpacing(0)
-        center_row.addStretch(1)
+        center = QHBoxLayout()
+        center.addStretch(1)
 
         self._card = QFrame()
         self._card.setObjectName("setupCard")
         self._card.setMaximumWidth(SETUP_MAX_WIDTH)
-        self._card.setMinimumWidth(760)
-        apply_card_shadow(self._card, blur_radius=36.0, y_offset=8.0)
-        center_row.addWidget(self._card)
+        self._card.setMinimumWidth(SETUP_MIN_WIDTH)
+        apply_card_shadow(self._card, blur_radius=30.0, y_offset=7.0)
 
-        center_row.addStretch(1)
-        page_layout.addLayout(center_row)
-        page_layout.addStretch(1)
+        center.addWidget(self._card)
+        center.addStretch(1)
+
+        root.addLayout(center)
+        root.addStretch(1)
 
         card_layout = QVBoxLayout(self._card)
-        card_layout.setContentsMargins(34, 30, 34, 30)
-        card_layout.setSpacing(24)
-
-        header = QFrame()
-        header.setObjectName("heroHeader")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(8)
+        card_layout.setContentsMargins(26, 22, 26, 22)
+        card_layout.setSpacing(14)
 
         self._title = QLabel("Choose how to start")
         self._title.setObjectName("titleLabel")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title.setWordWrap(True)
-        header_layout.addWidget(self._title)
+        card_layout.addWidget(self._title)
 
-        self._subtitle = QLabel("Select a conversation mode and model for this session.")
+        self._subtitle = QLabel("Select your support mode and model.")
         self._subtitle.setObjectName("subtitleLabel")
         self._subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._subtitle.setWordWrap(True)
-        header_layout.addWidget(self._subtitle)
-        card_layout.addWidget(header)
+        card_layout.addWidget(self._subtitle)
 
-        main_grid = QHBoxLayout()
-        main_grid.setContentsMargins(0, 0, 0, 0)
-        main_grid.setSpacing(18)
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 8, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
 
-        left_column = QVBoxLayout()
-        left_column.setContentsMargins(0, 0, 0, 0)
-        left_column.setSpacing(18)
-        left_column.addWidget(self._build_mode_section())
-        left_column.addWidget(self._build_provider_section())
-        left_column.addStretch(1)
-
-        right_column = QVBoxLayout()
-        right_column.setContentsMargins(0, 0, 0, 0)
-        right_column.setSpacing(18)
+        grid.addWidget(self._build_mode_section(), 0, 0)
+        grid.addWidget(self._build_provider_section(), 0, 1)
 
         self._provider_stack = QStackedWidget()
         self._provider_stack.setObjectName("providerStack")
         self._provider_stack.addWidget(self._build_local_panel())
         self._provider_stack.addWidget(self._build_cloud_panel())
-        right_column.addWidget(self._provider_stack)
-        right_column.addStretch(1)
+        grid.addWidget(self._provider_stack, 1, 0, 1, 2)
 
-        main_grid.addLayout(left_column, 1)
-        main_grid.addLayout(right_column, 1)
-        card_layout.addLayout(main_grid)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        card_layout.addLayout(grid)
 
         self._status_label = QLabel("")
         self._status_label.setObjectName("statusLabel")
@@ -160,18 +120,32 @@ class ModelSetupPage(QWidget):
         self._start_button = QPushButton("Start Chat")
         self._start_button.setObjectName("startButton")
         self._start_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._start_button.setMinimumHeight(54)
+        self._start_button.setMinimumHeight(46)
         self._start_button.clicked.connect(self._on_start)
         card_layout.addWidget(self._start_button)
 
     def _build_mode_section(self) -> QWidget:
-        section = self._make_section("Conversation mode", "Choose how PetChat should respond during this session.")
+        section = self._make_section(
+            "Conversation mode",
+            "How should PetChat respond?",
+        )
         layout = section.layout()
 
-        support_button = self._make_choice_button("Get Support", "Talk about how you feel", checked=True)
-        help_button = self._make_choice_button("Help Someone", "Get coaching to support another person")
+        support_button = self._make_choice_button(
+            "Get Support",
+            "Talk about how you feel",
+            checked=True,
+        )
+        help_button = self._make_choice_button(
+            "Help Someone",
+            "Coach me to support someone",
+        )
 
-        self._mode_buttons = {MODE_GET_SUPPORT: support_button, MODE_HELP_SOMEONE: help_button}
+        self._mode_buttons = {
+            MODE_GET_SUPPORT: support_button,
+            MODE_HELP_SOMEONE: help_button,
+        }
+
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_group.addButton(support_button)
@@ -185,13 +159,27 @@ class ModelSetupPage(QWidget):
         return section
 
     def _build_provider_section(self) -> QWidget:
-        section = self._make_section("Model source", "Choose local privacy or a cloud endpoint.")
+        section = self._make_section(
+            "Model source",
+            "Choose local or cloud.",
+        )
         layout = section.layout()
 
-        local_button = self._make_choice_button("Local", "Private Ollama model on this computer", checked=True)
-        cloud_button = self._make_choice_button("Cloud", "Use a custom API endpoint")
+        local_button = self._make_choice_button(
+            "Local",
+            "Private Ollama model",
+            checked=True,
+        )
+        cloud_button = self._make_choice_button(
+            "Cloud",
+            "Custom API endpoint",
+        )
 
-        self._provider_buttons = {"local": local_button, "cloud": cloud_button}
+        self._provider_buttons = {
+            "local": local_button,
+            "cloud": cloud_button,
+        }
+
         self._provider_group = QButtonGroup(self)
         self._provider_group.setExclusive(True)
         self._provider_group.addButton(local_button)
@@ -205,59 +193,78 @@ class ModelSetupPage(QWidget):
         return section
 
     def _build_local_panel(self) -> QWidget:
-        panel = self._make_section("Local model", "Choose the Ollama model PetChat should use.")
+        panel = self._make_section(
+            "Local model",
+            "Choose the Ollama model PetChat should use.",
+        )
         layout = panel.layout()
 
         self._local_model_buttons.clear()
-        for provider_id, model_id in LOCAL_PROVIDERS.items():
+
+        model_grid = QGridLayout()
+        model_grid.setContentsMargins(0, 0, 0, 0)
+        model_grid.setHorizontalSpacing(10)
+        model_grid.setVerticalSpacing(10)
+
+        for index, (provider_id, model_id) in enumerate(LOCAL_PROVIDERS.items()):
             button = self._make_choice_button(
                 str(model_id),
                 f"Provider: {provider_id}",
                 checked=provider_id == DEFAULT_LOCAL_PROVIDER,
             )
-            button.clicked.connect(lambda checked=False, pid=provider_id: self._select_local_model(pid))
+            button.clicked.connect(
+                lambda checked=False, pid=provider_id: self._select_local_model(pid)
+            )
             self._local_model_buttons[provider_id] = button
-            layout.addWidget(button)
+            model_grid.addWidget(button, index // 2, index % 2)
 
+        layout.addLayout(model_grid)
         return panel
 
     def _build_cloud_panel(self) -> QWidget:
         panel = self._make_section(
             "Cloud settings",
-            "Use an OpenAI-compatible endpoint. Your key is only used for this session.",
+            "Use an OpenAI-compatible endpoint.",
         )
         layout = panel.layout()
 
-        layout.addWidget(self._make_input_label("Model ID"))
+        form_grid = QGridLayout()
+        form_grid.setContentsMargins(0, 0, 0, 0)
+        form_grid.setHorizontalSpacing(10)
+        form_grid.setVerticalSpacing(8)
+
         self._cloud_model_input = QLineEdit()
         self._cloud_model_input.setObjectName("panelInput")
-        self._cloud_model_input.setPlaceholderText("meta-llama/llama-4-scout-17b-16e-instruct")
+        self._cloud_model_input.setPlaceholderText("Model ID")
         self._cloud_model_input.setText(CLOUD_PROVIDERS.get(DEFAULT_CLOUD_PROVIDER, ""))
-        layout.addWidget(self._cloud_model_input)
 
-        layout.addWidget(self._make_input_label("API base URL"))
         self._cloud_base_url_input = QLineEdit()
         self._cloud_base_url_input.setObjectName("panelInput")
-        self._cloud_base_url_input.setPlaceholderText("https://api.openai.com/v1")
+        self._cloud_base_url_input.setPlaceholderText("API base URL")
         self._cloud_base_url_input.setText(DEFAULT_CLOUD_BASE_URL)
-        layout.addWidget(self._cloud_base_url_input)
 
-        layout.addWidget(self._make_input_label("API key"))
         self._cloud_api_key_input = QLineEdit()
         self._cloud_api_key_input.setObjectName("panelInput")
-        self._cloud_api_key_input.setPlaceholderText("Paste your API key")
+        self._cloud_api_key_input.setPlaceholderText("API key")
         self._cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self._cloud_api_key_input)
-        layout.addStretch(1)
 
+        form_grid.addWidget(self._make_input_label("Model ID"), 0, 0)
+        form_grid.addWidget(self._make_input_label("API base URL"), 0, 1)
+        form_grid.addWidget(self._cloud_model_input, 1, 0)
+        form_grid.addWidget(self._cloud_base_url_input, 1, 1)
+        form_grid.addWidget(self._make_input_label("API key"), 2, 0, 1, 2)
+        form_grid.addWidget(self._cloud_api_key_input, 3, 0, 1, 2)
+
+        layout.addLayout(form_grid)
         return panel
 
     def _make_section(self, title: str, note: str) -> QFrame:
         section = QFrame()
         section.setObjectName("sectionCard")
+
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(22, 20, 22, 22)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 15, 18, 16)
+        layout.setSpacing(8)
 
         label = QLabel(title)
         label.setObjectName("fieldLabel")
@@ -267,6 +274,7 @@ class ModelSetupPage(QWidget):
         helper.setObjectName("noteLabel")
         helper.setWordWrap(True)
         layout.addWidget(helper)
+
         return section
 
     def _make_input_label(self, text: str) -> QLabel:
@@ -274,103 +282,95 @@ class ModelSetupPage(QWidget):
         label.setObjectName("inputLabel")
         return label
 
-    def _make_choice_button(self, title: str, description: str, checked: bool = False) -> QPushButton:
+    def _make_choice_button(
+        self,
+        title: str,
+        description: str,
+        checked: bool = False,
+    ) -> QPushButton:
         button = QPushButton(f"{title}\n{description}")
         button.setObjectName("choiceButton")
         button.setCheckable(True)
         button.setChecked(checked)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setMinimumHeight(82)
+        button.setMinimumHeight(58)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return button
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
             f"""
-            QWidget#setupPage, QScrollArea#setupScroll {{
+            QWidget {{
                 background-color: {C.BG};
                 color: {C.TEXT};
-                border: none;
             }}
 
             QFrame#setupCard {{
                 background-color: #111111;
                 border: 1px solid #2B2B2B;
-                border-radius: 24px;
-            }}
-
-            QFrame#heroHeader {{
-                background-color: transparent;
-                border: none;
+                border-radius: 22px;
             }}
 
             QFrame#sectionCard {{
                 background-color: #171717;
                 border: 1px solid #2A2A2A;
-                border-radius: 20px;
+                border-radius: 17px;
             }}
 
             QLabel#titleLabel {{
                 color: #F4F4F5;
-                font-size: 28px;
+                font-size: 25px;
                 font-weight: 850;
-                letter-spacing: -0.4px;
                 background: transparent;
             }}
 
             QLabel#subtitleLabel {{
                 color: #A1A1AA;
-                font-size: 14px;
-                font-weight: 450;
+                font-size: 13px;
                 background: transparent;
             }}
 
             QLabel#fieldLabel {{
                 color: #F4F4F5;
-                font-size: 15px;
+                font-size: 14px;
                 font-weight: 800;
                 background: transparent;
             }}
 
             QLabel#noteLabel {{
                 color: #A1A1AA;
-                font-size: 13px;
-                font-weight: 450;
+                font-size: 12px;
                 background: transparent;
-                line-height: 145%;
             }}
 
             QLabel#inputLabel {{
                 color: #D4D4D8;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 700;
                 background: transparent;
-                margin-top: 4px;
             }}
 
             QLabel#statusLabel {{
                 color: #A1A1AA;
-                font-size: 13px;
+                font-size: 12px;
                 background: transparent;
-                min-height: 20px;
+                min-height: 18px;
             }}
 
             QPushButton#choiceButton {{
                 background-color: #101010;
                 color: #F4F4F5;
                 border: 1px solid #303030;
-                border-radius: 16px;
-                padding: 14px 18px;
+                border-radius: 14px;
+                padding: 9px 14px;
                 text-align: left;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 650;
-                line-height: 150%;
             }}
 
             QPushButton#choiceButton:hover {{
                 background-color: #1E1E1E;
                 border: 1px solid #565656;
-                color: #FFFFFF;
             }}
 
             QPushButton#choiceButton:checked {{
@@ -390,10 +390,10 @@ class ModelSetupPage(QWidget):
                 background-color: #101010;
                 color: #F4F4F5;
                 border: 1px solid #303030;
-                border-radius: 14px;
-                padding: 12px 14px;
-                font-size: 13px;
-                min-height: 22px;
+                border-radius: 12px;
+                padding: 9px 12px;
+                font-size: 12px;
+                min-height: 20px;
                 selection-background-color: #FFD84D;
                 selection-color: #111111;
             }}
@@ -411,9 +411,9 @@ class ModelSetupPage(QWidget):
                 background-color: #FFD84D;
                 color: #111111;
                 border: 1px solid #FFD84D;
-                border-radius: 16px;
-                padding: 13px 22px;
-                font-size: 15px;
+                border-radius: 14px;
+                padding: 10px 18px;
+                font-size: 14px;
                 font-weight: 850;
             }}
 
@@ -481,6 +481,7 @@ class ModelSetupPage(QWidget):
             if not provider_id or not model_id:
                 self._show_status("Please select a local model.", error=True)
                 return None
+
             self._clear_status()
             return {
                 "provider_type": "local",
@@ -520,7 +521,9 @@ class ModelSetupPage(QWidget):
 
     def _show_status(self, message: str, error: bool = False) -> None:
         color = C.DANGER if error else "#A1A1AA"
-        self._status_label.setStyleSheet(f"color: {color}; font-size: 13px; background: transparent;")
+        self._status_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; background: transparent;"
+        )
         self._status_label.setText(message)
         self._status_label.show()
 
@@ -548,8 +551,10 @@ class ModelSetupPage(QWidget):
 
         for button in self._provider_buttons.values():
             button.setEnabled(True)
+
         if "local" in self._provider_buttons:
             self._provider_buttons["local"].setEnabled(ENABLE_LOCAL_MODELS)
+
         if "cloud" in self._provider_buttons:
             self._provider_buttons["cloud"].setEnabled(ENABLE_CLOUD_MODELS)
 
@@ -564,6 +569,7 @@ class ModelSetupPage(QWidget):
         self._selected_local_provider = DEFAULT_LOCAL_PROVIDER
         if self._selected_local_provider not in LOCAL_PROVIDERS and LOCAL_PROVIDERS:
             self._selected_local_provider = next(iter(LOCAL_PROVIDERS.keys()))
+
         self._select_local_model(self._selected_local_provider)
 
         self._cloud_model_input.setText(CLOUD_PROVIDERS.get(DEFAULT_CLOUD_PROVIDER, ""))
