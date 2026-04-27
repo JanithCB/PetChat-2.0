@@ -1,6 +1,6 @@
 # PetChat 2.0
 
-PetChat 2.0 is a desktop AI emotional-support chatbot built with Python and PyQt6. It is designed to feel more like a calm, caring companion than a generic chatbot, while supporting both local and cloud language models, local RAG, and a future-ready Supabase memory layer.
+PetChat 2.0 is a desktop AI emotional-support chatbot built with Python and PyQt6. It is designed to feel more like a calm, caring companion than a generic chatbot, while supporting both local and cloud language models, local RAG, an integrated emotion classifier, and a future-ready Supabase memory layer.
 
 ---
 
@@ -14,6 +14,7 @@ PetChat 2.0 is a desktop AI emotional-support chatbot built with Python and PyQt
 - Cloud models through OpenAI-compatible APIs
 - Local RAG over `cleaned_txt/`
 - Safety-aware response flow for higher-risk messages
+- Emotion classification integrated into the chat pipeline
 - Warm friend-style prompting and rewrite layer
 - Minimal Supabase integration for future conversation memory
 - Simple multi-screen UI:
@@ -32,6 +33,7 @@ Instead of sounding robotic or overly clinical, the assistant is designed to:
 - avoid diagnosis and therapist-like language
 - handle emotional support more safely
 - use retrieved wellbeing content when helpful
+- adapt tone using detected emotional signals
 - support both people seeking help and people helping someone else
 
 ---
@@ -46,6 +48,7 @@ The system focuses on:
 - gentle follow-up
 - calm emotional support
 - minimal advice overload
+- classifier-informed tone when helpful
 
 ### Help Someone
 This mode is for users who want help supporting a friend, partner, family member, or someone else.
@@ -55,6 +58,7 @@ The system focuses on:
 - what practical steps to suggest
 - when to encourage professional help
 - using RAG more often for grounded support guidance
+- keeping the assistant clearly in helper mode
 
 ---
 
@@ -64,6 +68,8 @@ The system focuses on:
 - PyQt6
 - Ollama
 - OpenAI-compatible cloud APIs
+- Hugging Face Transformers
+- PyTorch
 - FAISS
 - NumPy
 - Supabase Python client
@@ -85,6 +91,13 @@ PetChat-2.0/
 │   ├── config.py
 │   ├── core/
 │   │   ├── __init__.py
+│   │   ├── emotion_classifier.py
+│   │   ├── emotion_model/
+│   │   │   ├── config.json
+│   │   │   ├── tokenizer_config.json
+│   │   │   ├── tokenizer.json
+│   │   │   ├── special_tokens_map.json
+│   │   │   └── model.safetensors
 │   │   ├── pipeline.py
 │   │   ├── prompts.py
 │   │   ├── providers.py
@@ -132,18 +145,29 @@ The user chooses:
 ### 3. Safety check runs first
 Each user message is checked for higher-risk language before normal generation continues.
 
-### 4. RAG is used when appropriate
-Local RAG searches the `cleaned_txt/` wellbeing documents when support context is useful, especially in Help Someone mode.
+### 4. Emotion classification runs on normal turns
+If the message is not high-risk, the classifier predicts an emotional tone such as sadness, anxiety, stress, anger, confusion, calm, or positive mood.
 
-### 5. Draft response is generated
+This signal is used to:
+- improve the internal support plan
+- shape prompt tone more accurately
+- keep replies warmer and more emotionally aware
+
+If the classifier is unavailable or fails, the system falls back safely to the existing rule-based behavior.
+
+### 5. RAG is used when appropriate
+Local RAG searches the `cleaned_txt/` wellbeing documents when support context is useful, especially in Help Someone mode and longer guidance-heavy turns.
+
+### 6. Draft response is generated
 The selected model creates a first response using:
 - system instructions
 - example style turns
 - recent history
 - optional RAG context
+- classifier-informed tone guidance
 
-### 6. Reply is rewritten into final style
-A rewrite step makes the response sound warmer, shorter, and more natural for chat.
+### 7. Reply is rewritten into final style
+A rewrite step makes the response sound warmer, shorter, more natural, and more chat-friendly.
 
 ---
 
@@ -160,6 +184,7 @@ Typical settings include:
 - cloud provider settings
 - RAG feature flags
 - Supabase feature flags
+- emotion classifier feature flags
 - UI constants
 - root paths for `cleaned_txt/` and cache directories
 
@@ -175,6 +200,7 @@ Example:
 OLLAMA_BASE_URL=http://localhost:11434
 RAG_ENABLED=true
 USE_SUPABASE_MEMORY=true
+USE_EMOTION_CLASSIFIER=true
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_KEY=your_service_role_key
 ```
@@ -240,6 +266,8 @@ python -m src.app --cli --model phi4-mini:latest
 python -m src.app --no-rag
 ```
 
+The emotion classifier does not require a separate startup command. It is loaded inside the normal chat pipeline and is designed to remain optional.
+
 ---
 
 ## Supabase Setup
@@ -269,6 +297,8 @@ It should not:
 
 For higher-risk situations, the app should guide the user toward trusted people, crisis support, or emergency services.
 
+Safety always stays ahead of emotion classification, RAG, and generation.
+
 ---
 
 ## Current Status
@@ -280,14 +310,16 @@ Current implementation work includes:
 - safety module
 - chat pipeline
 - local RAG engine
+- integrated emotion classifier
 - minimal Supabase client and conversation store
 
 The architecture is set up so future work can expand:
 - memory
 - evaluation
-- emotion classification
 - UI polish
 - richer support planning
+- richer analytics around emotion trends
+- better long-term memory handling
 
 ---
 
@@ -297,10 +329,11 @@ The architecture is set up so future work can expand:
 - More polished chat pacing and streaming
 - Better retrieval tuning for emotional support
 - Stronger guided-help prompting
-- Emotion classification
 - Richer evaluation workflows
 - Better Supabase-backed long-term memory
 - Optional journaling or mood tracking
+- Internal analytics such as emotion-over-time views
+- More refined support planning and prompt adaptation
 
 ---
 
