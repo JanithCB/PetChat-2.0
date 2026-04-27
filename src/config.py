@@ -68,9 +68,20 @@ MAX_HISTORY_TURNS: int = int(os.environ.get("MAX_HISTORY_TURNS", "8"))
 
 ENABLE_CLOUD_MODELS: bool = _env_flag("ENABLE_CLOUD_MODELS", True)
 ENABLE_LOCAL_MODELS: bool = _env_flag("ENABLE_LOCAL_MODELS", True)
+
+# Retrieval-Augmented Generation:
+# Enables optional knowledge retrieval for guidance-heavy turns.
 RAG_ENABLED: bool = _env_flag("RAG_ENABLED", True)
+
+# Memory / Supabase:
+# Enables optional persistent memory features.
 USE_SUPABASE_MEMORY: bool = _env_flag("USE_SUPABASE_MEMORY", False)
 SUPABASE_ENABLED: bool = USE_SUPABASE_MEMORY
+
+# Emotion classifier:
+# This should remain optional. If disabled, the pipeline should skip
+# classifier inference and continue with the existing rule-based flow.
+USE_EMOTION_CLASSIFIER: bool = _env_flag("USE_EMOTION_CLASSIFIER", True)
 
 
 # ---------------------------------------------------------------------------

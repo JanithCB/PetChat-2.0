@@ -4,12 +4,13 @@ src/core/pipeline.py -- Main chat-turn orchestrator for PetChat-2.0 v2.
 Pipeline order:
 1. Risk detection
 2. High-risk safety fast path
-3. Lightweight internal support plan
-4. Mode-aware RAG
-5. Optional memory context (stub for now)
-6. Draft generation
-7. Rewrite into friend-style reply
-8. Emoji enforcement
+3. Optional emotion classification
+4. Lightweight internal support plan
+5. Mode-aware RAG
+6. Optional memory context (stub for now)
+7. Draft generation
+8. Rewrite into friend-style reply
+9. Emoji enforcement
 """
 
 from __future__ import annotations
@@ -88,12 +89,18 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", _normalize_text(text).lower()))
+
+
 def _build_basic_support_plan(
     mode: str,
     user_message: str,
     history: list[dict[str, str]],
     risk_level: str,
     risk_tags: list[str],
+    detected_emotion: str | None = None,
+    emotion_confidence: float = 0.0,
 ) -> dict[str, Any]:
     """
     Lightweight fallback support planner used until a fuller planner is added.
@@ -109,6 +116,8 @@ def _build_basic_support_plan(
     response_style = "warm and grounded"
     strategies: list[str] = []
     use_emoji = risk_level == LOW
+
+    normalized_detected_emotion = (detected_emotion or "").strip().lower() or None
 
     if normalized_mode == HELP_SOMEONE:
         primary_emotion = "concern"
@@ -137,6 +146,17 @@ def _build_basic_support_plan(
         else:
             stage = "exploration"
 
+        if normalized_detected_emotion == "anxious":
+            response_style = "supportive, steady, and practical"
+        elif normalized_detected_emotion == "stressed":
+            response_style = "calm, practical, and containing"
+        elif normalized_detected_emotion == "confused":
+            response_style = "supportive, clear, and practical"
+        elif normalized_detected_emotion == "angry":
+            response_style = "calm, containing, and practical"
+        elif normalized_detected_emotion == "sad":
+            response_style = "warm, gentle, and practical"
+
     else:
         primary_emotion = "distress"
         response_style = "warm and empathetic"
@@ -159,6 +179,28 @@ def _build_basic_support_plan(
             primary_emotion = "frustration"
             stage = "exploration"
 
+        if normalized_detected_emotion == "sad":
+            primary_emotion = "sadness"
+            response_style = "very warm, gentle, and validating"
+        elif normalized_detected_emotion == "anxious":
+            primary_emotion = "anxiety"
+            response_style = "calm, steady, and grounding"
+        elif normalized_detected_emotion == "stressed":
+            primary_emotion = "stress"
+            response_style = "calm, grounding, and contained"
+        elif normalized_detected_emotion == "angry":
+            primary_emotion = "frustration"
+            response_style = "calm, containing, and non-defensive"
+        elif normalized_detected_emotion == "confused":
+            primary_emotion = "confusion"
+            response_style = "clear, patient, and unhurried"
+        elif normalized_detected_emotion == "calm":
+            primary_emotion = "calm"
+            response_style = "warm, natural, and lightly reassuring"
+        elif normalized_detected_emotion == "happy":
+            primary_emotion = "positive"
+            response_style = "warm, natural, and light"
+
     if "isolation" in risk_tags or "hopelessness" in risk_tags or risk_level != LOW:
         use_emoji = False
 
@@ -171,6 +213,8 @@ def _build_basic_support_plan(
         "strategies": strategies,
         "follow_up_style": "one gentle follow-up question at most",
         "use_emoji": use_emoji,
+        "detected_emotion": normalized_detected_emotion,
+        "emotion_confidence": float(emotion_confidence or 0.0),
     }
 
 
@@ -179,16 +223,75 @@ def _is_low_value_turn(user_message: str) -> bool:
     return text in {"ok", "okay", "thanks", "thank you", "got it", "cool"}
 
 
+def _is_short_emotional_checkin(user_message: str) -> bool:
+    text = _normalize_text(user_message).lower()
+    words = _word_count(text)
+
+    if not text:
+        return True
+
+    guidance_patterns = [
+        r"\bwhat should i do\b",
+        r"\bwhat can i do\b",
+        r"\bhow do i\b",
+        r"\bhow can i\b",
+        r"\bwhat should i say\b",
+        r"\bcan you help me\b",
+        r"\bany advice\b",
+        r"\bany tips\b",
+        r"\bhow to cope\b",
+        r"\bhow to calm down\b",
+        r"\bhow to handle\b",
+        r"\bhow to support\b",
+        r"\bwhat helps\b",
+        r"\bwhat would help\b",
+    ]
+    if _matches_any(text, guidance_patterns):
+        return False
+
+    emotional_checkin_patterns = [
+        r"\bi feel\b",
+        r"\bi'm feeling\b",
+        r"\bi am feeling\b",
+        r"\bfeel really\b",
+        r"\bfeel kinda\b",
+        r"\bfeel so\b",
+        r"\banxious\b",
+        r"\bstressed\b",
+        r"\boverwhelmed\b",
+        r"\bsad\b",
+        r"\bempty\b",
+        r"\blonely\b",
+        r"\bworthless\b",
+        r"\bhopeless\b",
+        r"\bconfused\b",
+        r"\bnot okay\b",
+        r"\bnot doing well\b",
+        r"\brough day\b",
+        r"\bbad day\b",
+        r"\bjust tired\b",
+    ]
+
+    return words <= 18 and _matches_any(text, emotional_checkin_patterns)
+
+
 def _should_use_rag(
     mode: str,
     user_message: str,
     risk_level: str,
 ) -> bool:
     """
-    Use RAG selectively, mainly for Help Someone guidance turns.
+    Use RAG selectively.
+
+    Priority:
+    - Mostly for Help Someone turns
+    - For longer, guidance-heavy Get Support turns
+    - Not for very short, purely emotional check-ins
     """
     normalized_mode = _normalize_mode(mode)
     text = _normalize_text(user_message)
+    lowered = text.lower()
+    words = _word_count(lowered)
 
     if not text or _is_low_value_turn(text):
         return False
@@ -204,6 +307,9 @@ def _should_use_rag(
     if risk_level == HIGH:
         return False
 
+    if _is_short_emotional_checkin(lowered):
+        return False
+
     helper_patterns = [
         r"\bmy friend\b",
         r"\bmy partner\b",
@@ -216,12 +322,20 @@ def _should_use_rag(
         r"\bmy mom\b",
         r"\bmy dad\b",
         r"\bsomeone i care about\b",
+        r"\bsomeone close to me\b",
+        r"\bthey have been\b",
+        r"\bhe has been\b",
+        r"\bshe has been\b",
         r"\bwhat should i say\b",
         r"\bhow do i help\b",
         r"\bhow can i help\b",
         r"\bwhat can i do\b",
+        r"\bhow do i support\b",
+        r"\bhow can i support\b",
         r"\bwithdrawing\b",
         r"\bshutting everyone out\b",
+        r"\bwon't talk\b",
+        r"\bwont talk\b",
         r"\bnothing matters\b",
         r"\bhopeless\b",
         r"\bpanic\b",
@@ -229,11 +343,43 @@ def _should_use_rag(
         r"\bdepressed\b",
     ]
 
-    if normalized_mode == HELP_SOMEONE and _matches_any(text, helper_patterns):
-        return True
+    guidance_patterns = [
+        r"\bwhat should i do\b",
+        r"\bwhat can i do\b",
+        r"\bhow do i\b",
+        r"\bhow can i\b",
+        r"\bwhat should i say\b",
+        r"\bcan you help me\b",
+        r"\bany advice\b",
+        r"\bany tips\b",
+        r"\bhow to cope\b",
+        r"\bhow to calm down\b",
+        r"\bhow to handle\b",
+        r"\bhow to deal with\b",
+        r"\bwhat helps\b",
+        r"\bwhat would help\b",
+        r"\bgive me steps\b",
+        r"\bpractical\b",
+        r"\btechniques\b",
+        r"\bstrategies\b",
+        r"\bexercises\b",
+    ]
 
-    if normalized_mode == GET_SUPPORT and risk_level == MEDIUM and len(text) > 180:
-        return True
+    if normalized_mode == HELP_SOMEONE:
+        if _matches_any(lowered, helper_patterns):
+            return True
+        if words >= 14 and ("?" in lowered or _matches_any(lowered, guidance_patterns)):
+            return True
+        return False
+
+    if normalized_mode == GET_SUPPORT:
+        if words < 18 and risk_level == LOW:
+            return False
+        if _matches_any(lowered, guidance_patterns) and words >= 12:
+            return True
+        if risk_level == MEDIUM and words >= 24:
+            return True
+        return False
 
     return False
 
@@ -244,9 +390,29 @@ def _build_rag_query(
     risk_level: str,
 ) -> str:
     text = _normalize_text(user_message)
+    lowered = text.lower()
+
+    guidance_patterns = [
+        r"\bwhat should i do\b",
+        r"\bwhat can i do\b",
+        r"\bhow do i\b",
+        r"\bhow can i\b",
+        r"\bwhat should i say\b",
+        r"\bhow to cope\b",
+        r"\bhow to calm down\b",
+        r"\bhow to handle\b",
+        r"\bhow to deal with\b",
+        r"\bwhat helps\b",
+        r"\bpractical steps\b",
+        r"\bexercises\b",
+        r"\btechniques\b",
+    ]
 
     if _normalize_mode(mode) == HELP_SOMEONE:
         return f"how to support someone what to say practical help {text}"
+
+    if _matches_any(lowered, guidance_patterns):
+        return f"coping strategies grounding practical support steps {text}"
 
     if risk_level == MEDIUM:
         return f"emotional support grounding coping steps {text}"
@@ -422,7 +588,7 @@ def _fallback_reply(risk_level: str, mode: str) -> str:
 
     if _normalize_mode(mode) == HELP_SOMEONE:
         return (
-            "Hey, that sounds really hard, buddy. "
+            "Hey, that sounds really hard. "
             "You do not need perfect words here. "
             "A simple message like 'I care about you, and I am here with you' is often a good place to start."
         )
@@ -441,6 +607,7 @@ def _error_result(
     rag_context: str,
     error: str,
     mode: str,
+    emotion_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallback = _fallback_reply(risk_level, mode)
 
@@ -453,6 +620,8 @@ def _error_result(
         "draft_reply": fallback,
         "final_reply": fallback,
         "error": error,
+        "emotion_result": emotion_result or {},
+        "detected_emotion": (plan or {}).get("detected_emotion"),
     }
 
 
@@ -516,6 +685,8 @@ def _rewrite_help_someone_repair(
     """
     One lightweight repair pass if the rewrite drifts into the wrong perspective.
     """
+    _ = plan
+
     repair_instruction = (
         "Rewrite this reply so it clearly speaks to the user as a helper supporting another person.\n"
         "Keep the helper perspective intact.\n"
@@ -576,6 +747,7 @@ def run_chat_turn(
     from src.core.prompts import SAFETY_REPLY_HIGH  # noqa: PLC0415
     from src.core.providers import build_provider  # noqa: PLC0415
     from src.core.safety import detect_risk_level  # noqa: PLC0415
+    from src.core.emotion_classifier import classify_emotion  # noqa: PLC0415
 
     normalized_mode = _normalize_mode(mode)
     clean_message = _normalize_text(user_message)
@@ -591,6 +763,8 @@ def run_chat_turn(
             "draft_reply": "",
             "final_reply": "",
             "error": "Empty user_message.",
+            "emotion_result": {},
+            "detected_emotion": None,
         }
 
     risk_level, risk_tags = detect_risk_level(clean_message)
@@ -605,7 +779,24 @@ def run_chat_turn(
             "rag_context": "",
             "draft_reply": SAFETY_REPLY_HIGH,
             "final_reply": SAFETY_REPLY_HIGH,
+            "emotion_result": {},
+            "detected_emotion": None,
         }
+
+    emotion_result = classify_emotion(clean_message)
+    emotion_label = None
+    emotion_confidence = 0.0
+
+    if isinstance(emotion_result, dict) and emotion_result.get("ok"):
+        emotion_label = str(emotion_result.get("label", "")).strip().lower() or None
+        emotion_confidence = float(emotion_result.get("confidence", 0.0) or 0.0)
+
+    logger.info(
+        "Emotion result ok=%s label=%s confidence=%.3f",
+        emotion_result.get("ok") if isinstance(emotion_result, dict) else None,
+        emotion_label,
+        emotion_confidence,
+    )
 
     plan = _build_basic_support_plan(
         mode=normalized_mode,
@@ -613,6 +804,8 @@ def run_chat_turn(
         history=clean_history,
         risk_level=risk_level,
         risk_tags=risk_tags,
+        detected_emotion=emotion_label,
+        emotion_confidence=emotion_confidence,
     )
 
     rag_context, rag_used = _build_rag_context(
@@ -634,6 +827,7 @@ def run_chat_turn(
             rag_context=rag_context,
             error=str(exc),
             mode=normalized_mode,
+            emotion_result=emotion_result,
         )
 
     generation_messages = _build_generation_messages(
@@ -667,6 +861,7 @@ def run_chat_turn(
             rag_context=rag_context,
             error=str(exc),
             mode=normalized_mode,
+            emotion_result=emotion_result,
         )
 
     draft_reply = _trim_output(draft_reply, max_chars=900)
@@ -715,4 +910,6 @@ def run_chat_turn(
         "rag_context": rag_context,
         "draft_reply": (draft_reply or "").strip(),
         "final_reply": final_reply,
+        "emotion_result": emotion_result,
+        "detected_emotion": plan.get("detected_emotion"),
     }
