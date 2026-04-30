@@ -31,8 +31,8 @@ HELP_SOMEONE = "help_someone"
 _DRAFT_TEMPERATURE = 0.68
 _REWRITE_TEMPERATURE = 0.48
 
-_DEFAULT_DRAFT_MAX_TOKENS = 260
-_DEFAULT_REWRITE_MAX_TOKENS = 220
+_DEFAULT_DRAFT_MAX_TOKENS = 240
+_DEFAULT_REWRITE_MAX_TOKENS = 200
 
 
 def _normalize_mode(mode: str | None) -> str:
@@ -44,6 +44,16 @@ def _normalize_mode(mode: str | None) -> str:
 
 def _normalize_text(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _normalize_reply_text(text: str | None) -> str:
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+
+    paragraphs = [re.sub(r"[ \t]+", " ", part).strip() for part in re.split(r"\n{2,}", raw)]
+    paragraphs = [part for part in paragraphs if part]
+    return "\n\n".join(paragraphs)
 
 
 def _trim_history(
@@ -546,7 +556,11 @@ def _strip_emoji(text: str) -> str:
         "]+",
         flags=re.UNICODE,
     )
-    return emoji_pattern.sub("", text or "").strip()
+    cleaned = emoji_pattern.sub("", text or "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" ?\n ?","\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _allow_emojis(plan: dict[str, Any], risk_level: str) -> bool:
@@ -554,12 +568,33 @@ def _allow_emojis(plan: dict[str, Any], risk_level: str) -> bool:
 
 
 def _trim_output(text: str, max_chars: int) -> str:
-    clean = _normalize_text(text)
+    clean = _normalize_reply_text(text)
     if len(clean) <= max_chars:
         return clean
 
-    clipped = clean[:max_chars].rsplit(" ", 1)[0].strip()
-    return f"{clipped}..." if clipped else clean[:max_chars]
+    chunks = [part.strip() for part in re.split(r"\n{2,}", clean) if part.strip()]
+    kept: list[str] = []
+    total = 0
+
+    for chunk in chunks:
+        extra = len(chunk) + (2 if kept else 0)
+        if total + extra <= max_chars:
+            kept.append(chunk)
+            total += extra
+            continue
+
+        remaining = max_chars - total - (2 if kept else 0)
+        if remaining > 24:
+            clipped = chunk[:remaining].rsplit(" ", 1)[0].strip()
+            if clipped:
+                kept.append(f"{clipped}...")
+        break
+
+    if kept:
+        return "\n\n".join(kept).strip()
+
+    fallback = clean[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{fallback}..." if fallback else clean[:max_chars]
 
 
 def _draft_max_tokens(
@@ -568,15 +603,15 @@ def _draft_max_tokens(
     rag_used: bool,
 ) -> int:
     if risk_level == MEDIUM:
-        return 220
+        return 210
     if rag_used and _normalize_mode(mode) == HELP_SOMEONE:
-        return 230
+        return 225
     return _DEFAULT_DRAFT_MAX_TOKENS
 
 
 def _rewrite_max_tokens(risk_level: str) -> int:
     if risk_level == MEDIUM:
-        return 180
+        return 170
     return _DEFAULT_REWRITE_MAX_TOKENS
 
 
@@ -696,7 +731,7 @@ def _rewrite_help_someone_repair(
         "Keep it concise, natural, and chat-friendly.\n"
         "Do not start with the word 'I'.\n\n"
         f"User message:\n{_normalize_text(user_message)}\n\n"
-        f"Current reply:\n{_normalize_text(draft_reply)}\n\n"
+        f"Current reply:\n{_normalize_reply_text(draft_reply)}\n\n"
         "Fixed reply:"
     )
 
@@ -707,7 +742,7 @@ def _rewrite_help_someone_repair(
                 {"role": "user", "content": repair_instruction},
             ],
             temperature=0.35,
-            max_tokens=190 if risk_level == LOW else 170,
+            max_tokens=185 if risk_level == LOW else 165,
         )
         return _trim_output(repaired, max_chars=700)
     except Exception as exc:  # noqa: BLE001
@@ -864,7 +899,7 @@ def run_chat_turn(
             emotion_result=emotion_result,
         )
 
-    draft_reply = _trim_output(draft_reply, max_chars=900)
+    draft_reply = _trim_output(draft_reply, max_chars=820)
 
     try:
         rewrite_messages = _build_rewrite_messages(
@@ -882,7 +917,7 @@ def run_chat_turn(
         logger.warning("Rewrite failed, using draft: %s", exc)
         final_reply = draft_reply
 
-    final_reply = _trim_output(final_reply, max_chars=700)
+    final_reply = _trim_output(final_reply, max_chars=640)
 
     if normalized_mode == HELP_SOMEONE and _looks_like_wrong_help_someone_perspective(
         final_reply,
@@ -900,6 +935,7 @@ def run_chat_turn(
     if not _allow_emojis(plan, risk_level):
         final_reply = _strip_emoji(final_reply)
 
+    final_reply = _normalize_reply_text(final_reply)
     final_reply = final_reply.strip() or _fallback_reply(risk_level, normalized_mode)
 
     return {
@@ -908,7 +944,7 @@ def run_chat_turn(
         "support_plan": plan,
         "rag_used": rag_used,
         "rag_context": rag_context,
-        "draft_reply": (draft_reply or "").strip(),
+        "draft_reply": _normalize_reply_text(draft_reply),
         "final_reply": final_reply,
         "emotion_result": emotion_result,
         "detected_emotion": plan.get("detected_emotion"),

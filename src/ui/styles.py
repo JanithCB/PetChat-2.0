@@ -26,13 +26,13 @@ class C:
     STATUS_TEXT = THEME_COLORS["status_text"]
     DANGER = THEME_COLORS["danger"]
 
-    WARM_SURFACE = "#15130E"
-    WARM_SURFACE_ALT = "#1D1A12"
-    SOFT_BORDER = "#2E291B"
+    WARM_SURFACE = "#12110D"
+    WARM_SURFACE_ALT = "#17150F"
+    SOFT_BORDER = "#2B2619"
     SOFT_BORDER_HOVER = "#4A3D18"
     ACCENT_SOFT = "rgba(255, 204, 51, 0.12)"
     ACCENT_SOFT_QSS = "#2A2410"
-    SHADOW = QColor(0, 0, 0, 130)
+    SHADOW = QColor(0, 0, 0, 110)
 
 
 FONT_FAMILY = "Segoe UI"
@@ -43,19 +43,22 @@ FONT_SIZE_MD = 15
 FONT_SIZE_LG = 20
 FONT_SIZE_XL = 30
 
-CHAT_MAX_WIDTH = 1080
-CHAT_BUBBLE_MAX_WIDTH = 620
-CHAT_SIDE_PADDING = 34
-CHAT_TOP_PADDING = 22
-CHAT_BOTTOM_PADDING = 20
 
-BUBBLE_RADIUS = 16
-BUBBLE_PADDING_Y = 12
-BUBBLE_PADDING_X = 16
-BUBBLE_LINE_HEIGHT = 1.45
+CHAT_MAX_WIDTH = 1600
+CHAT_BUBBLE_MAX_WIDTH = 760
+CHAT_SIDE_PADDING = 20
+CHAT_TOP_PADDING = 18
+CHAT_BOTTOM_PADDING = 16
+
+
+BUBBLE_RADIUS = 14
+BUBBLE_PADDING_Y = 10
+BUBBLE_PADDING_X = 14
+BUBBLE_LINE_HEIGHT = 1.42
+
 
 CARD_RADIUS = 18
-INPUT_RADIUS = 22
+INPUT_RADIUS = 20
 BUTTON_RADIUS = 13
 
 
@@ -86,6 +89,7 @@ QPushButton:disabled {{
 }}
 """
 
+
 SECONDARY_BTN = f"""
 QPushButton {{
     background-color: {C.WARM_SURFACE_ALT};
@@ -112,6 +116,7 @@ QPushButton:disabled {{
 }}
 """
 
+
 GHOST_BTN = f"""
 QPushButton {{
     background-color: transparent;
@@ -135,6 +140,7 @@ QPushButton:disabled {{
     border: 1px solid #303030;
 }}
 """
+
 
 MODEL_BUTTON = f"""
 QPushButton {{
@@ -162,6 +168,7 @@ QPushButton:disabled {{
 }}
 """
 
+
 MODEL_BUTTON_SELECTED = f"""
 QPushButton {{
     background-color: {C.ACCENT_SOFT_QSS};
@@ -182,6 +189,7 @@ QPushButton:pressed {{
     border: 1px solid {C.ACCENT_HOVER};
 }}
 """
+
 
 INPUT = f"""
 QLineEdit, QTextEdit, QPlainTextEdit {{
@@ -208,14 +216,16 @@ QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
 }}
 """
 
+
 CHAT_INPUT_CONTAINER = f"""
 QFrame {{
-    background-color: #12100B;
-    border: 1px solid #3A321E;
+    background-color: #100F0B;
+    border: 1px solid #2E291C;
     border-radius: {INPUT_RADIUS}px;
-    padding: 6px;
+    padding: 4px;
 }}
 """
+
 
 COMBO = f"""
 QComboBox {{
@@ -247,12 +257,14 @@ QComboBox QAbstractItemView {{
 }}
 """
 
+
 STATUS_LABEL = f"""
 QLabel {{
     color: {C.STATUS_TEXT};
     font-size: {FONT_SIZE_SM}px;
 }}
 """
+
 
 PAGE_TITLE = f"""
 QLabel {{
@@ -263,6 +275,7 @@ QLabel {{
 }}
 """
 
+
 PAGE_SUBTITLE = f"""
 QLabel {{
     color: {C.MUTED};
@@ -270,6 +283,7 @@ QLabel {{
     line-height: 145%;
 }}
 """
+
 
 SECTION_CARD = f"""
 QFrame {{
@@ -279,7 +293,9 @@ QFrame {{
 }}
 """
 
+
 CARD = SECTION_CARD
+
 
 CHAT_PANEL = f"""
 QFrame {{
@@ -287,6 +303,7 @@ QFrame {{
     border: none;
 }}
 """
+
 
 USER_BUBBLE = f"""
 QLabel {{
@@ -301,11 +318,12 @@ QLabel {{
 }}
 """
 
+
 ASSISTANT_BUBBLE = f"""
 QLabel {{
-    background-color: #1B1A16;
+    background-color: #171612;
     color: {C.BOT_TEXT};
-    border: 1px solid #2F2A1D;
+    border: 1px solid #2A261C;
     border-radius: {BUBBLE_RADIUS}px;
     padding: {BUBBLE_PADDING_Y}px {BUBBLE_PADDING_X}px;
     font-size: {FONT_SIZE_BASE}px;
@@ -314,17 +332,19 @@ QLabel {{
 }}
 """
 
+
 TYPING_INDICATOR_BUBBLE = f"""
 QLabel {{
-    background-color: {C.WARM_SURFACE_ALT};
+    background-color: #15130F;
     color: {C.MUTED};
     border: 1px solid {C.SOFT_BORDER};
-    border-radius: 15px;
-    padding: 9px 13px;
+    border-radius: 14px;
+    padding: 8px 12px;
     font-size: {FONT_SIZE_SM}px;
     font-style: italic;
 }}
 """
+
 
 ERROR_BUBBLE = f"""
 QLabel {{
@@ -336,6 +356,7 @@ QLabel {{
     font-size: {FONT_SIZE_BASE}px;
 }}
 """
+
 
 SCROLLBAR = f"""
 QScrollBar:vertical {{
@@ -378,9 +399,9 @@ def get_bubble_style(role: str) -> str:
 
 def make_shadow(
     widget: QWidget,
-    blur_radius: float = 26.0,
-    y_offset: float = 6.0,
-    alpha: int = 120,
+    blur_radius: float = 24.0,
+    y_offset: float = 4.0,
+    alpha: int = 90,
 ) -> QGraphicsDropShadowEffect:
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur_radius)
@@ -391,8 +412,21 @@ def make_shadow(
 
 def make_bubble_shadow(
     widget: QWidget,
-    blur_radius: float = 18.0,
-    y_offset: float = 3.0,
+    blur_radius: float = 10.0,
+    y_offset: float = 1.5,
+) -> QGraphicsDropShadowEffect:
+    return make_shadow(
+        widget,
+        blur_radius=blur_radius,
+        y_offset=y_offset,
+        alpha=45,
+    )
+
+
+def make_card_shadow(
+    widget: QWidget,
+    blur_radius: float = 24.0,
+    y_offset: float = 6.0,
 ) -> QGraphicsDropShadowEffect:
     return make_shadow(
         widget,
@@ -402,36 +436,23 @@ def make_bubble_shadow(
     )
 
 
-def make_card_shadow(
-    widget: QWidget,
-    blur_radius: float = 32.0,
-    y_offset: float = 8.0,
-) -> QGraphicsDropShadowEffect:
-    return make_shadow(
-        widget,
-        blur_radius=blur_radius,
-        y_offset=y_offset,
-        alpha=115,
-    )
-
-
 def make_input_shadow(
     widget: QWidget,
-    blur_radius: float = 24.0,
-    y_offset: float = 5.0,
+    blur_radius: float = 16.0,
+    y_offset: float = 2.0,
 ) -> QGraphicsDropShadowEffect:
     return make_shadow(
         widget,
         blur_radius=blur_radius,
         y_offset=y_offset,
-        alpha=100,
+        alpha=55,
     )
 
 
 def apply_bubble_shadow(
     widget: QWidget,
-    blur_radius: float = 18.0,
-    y_offset: float = 3.0,
+    blur_radius: float = 10.0,
+    y_offset: float = 1.5,
 ) -> None:
     widget.setGraphicsEffect(
         make_bubble_shadow(widget, blur_radius=blur_radius, y_offset=y_offset)
@@ -440,8 +461,8 @@ def apply_bubble_shadow(
 
 def apply_card_shadow(
     widget: QWidget,
-    blur_radius: float = 32.0,
-    y_offset: float = 8.0,
+    blur_radius: float = 24.0,
+    y_offset: float = 6.0,
 ) -> None:
     widget.setGraphicsEffect(
         make_card_shadow(widget, blur_radius=blur_radius, y_offset=y_offset)
@@ -450,8 +471,8 @@ def apply_card_shadow(
 
 def apply_input_shadow(
     widget: QWidget,
-    blur_radius: float = 24.0,
-    y_offset: float = 5.0,
+    blur_radius: float = 16.0,
+    y_offset: float = 2.0,
 ) -> None:
     widget.setGraphicsEffect(
         make_input_shadow(widget, blur_radius=blur_radius, y_offset=y_offset)

@@ -1,4 +1,4 @@
-"""WhatsApp-style chat page for PetChat-2.0."""
+"""WhatsApp-style chat page for PetChat-2.0 desktop."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpacerItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -34,8 +33,6 @@ from PyQt6.QtWidgets import (
 from src.config import APP_NAME, MAX_HISTORY_TURNS, MODE_GET_SUPPORT, MODE_HELP_SOMEONE
 from src.ui.styles import (
     C,
-    GHOST_BTN,
-    PRIMARY_BTN,
     STATUS_LABEL,
     apply_bubble_shadow,
     apply_input_shadow,
@@ -46,13 +43,11 @@ try:
     from src.ui.styles import (
         CHAT_BUBBLE_MAX_WIDTH,
         CHAT_INPUT_CONTAINER,
-        CHAT_MAX_WIDTH,
         CHAT_SIDE_PADDING,
         CHAT_TOP_PADDING,
         CHAT_BOTTOM_PADDING,
     )
 except ImportError:
-    CHAT_MAX_WIDTH = 860
     CHAT_BUBBLE_MAX_WIDTH = 640
     CHAT_SIDE_PADDING = 22
     CHAT_TOP_PADDING = 18
@@ -66,45 +61,100 @@ except ImportError:
     }}
     """
 
+_QT_MAX = 16777215
+_MIN_BUBBLE_WIDTH = 260
+_HARD_MAX_BUBBLE_WIDTH = max(CHAT_BUBBLE_MAX_WIDTH, 760)
+_ROW_SIDE_PADDING = max(CHAT_SIDE_PADDING, 24)
+_COMPOSER_MIN_HEIGHT = 52
+_COMPOSER_MAX_HEIGHT = 110
 
-def split_reply_into_chunks(text: str, max_chunks: int = 3) -> list[str]:
-    text = text.strip()
+
+def _looks_like_emoji_or_tiny_tail(text: str) -> bool:
+    cleaned = text.strip()
+    if not cleaned:
+        return True
+
+    if len(cleaned) <= 6 and not re.search(r"[A-Za-z0-9]", cleaned):
+        return True
+
+    if len(cleaned) <= 18 and cleaned.count(" ") <= 2 and not re.search(r"[.!?]$", cleaned):
+        return True
+
+    return False
+
+
+def split_reply_into_chunks(text: str, preferred_max_chunks: int = 2) -> list[str]:
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
     if not text:
         return []
 
-    parts = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
+    paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
+    if len(paragraphs) <= 1:
+        return [text]
 
-    if len(parts) <= 1:
-        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-        if len(sentences) <= 2:
-            parts = [text]
+    if len(paragraphs) >= 3 and len(text) >= 520:
+        max_chunks = 3
+    else:
+        max_chunks = preferred_max_chunks
+
+    chunks: list[str] = []
+    current = ""
+
+    for paragraph in paragraphs:
+        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+
+        if not current:
+            current = paragraph
+            continue
+
+        if len(chunks) + 1 >= max_chunks:
+            current = candidate
+            continue
+
+        if len(candidate) <= 320:
+            current = candidate
         else:
-            groups: list[str] = []
-            remaining = list(sentences)
+            chunks.append(current)
+            current = paragraph
 
-            while remaining and len(groups) < max_chunks:
-                slots_left = max_chunks - len(groups)
-                take = max(1, round(len(remaining) / slots_left))
-                groups.append(" ".join(remaining[:take]).strip())
-                remaining = remaining[take:]
+    if current:
+        chunks.append(current)
 
-            parts = groups
+    if len(chunks) > max_chunks:
+        chunks = chunks[: max_chunks - 1] + ["\n\n".join(chunks[max_chunks - 1 :]).strip()]
 
-    if len(parts) > max_chunks:
-        parts = parts[: max_chunks - 1] + ["\n\n".join(parts[max_chunks - 1 :])]
+    if len(chunks) >= 2 and _looks_like_emoji_or_tiny_tail(chunks[-1]):
+        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
+        chunks.pop()
 
-    return [part for part in parts if part]
+    return [chunk for chunk in chunks if chunk.strip()]
 
 
 class _MessageBubble(QWidget):
     def __init__(self, text: str, role: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._role = role
+        self._label: QLabel | None = None
         self._build(text)
 
+    @property
+    def role(self) -> str:
+        return self._role
+
+    def set_bubble_max_width(self, width: int) -> None:
+        if self._label is None:
+            return
+
+        safe_width = max(170, int(width))
+        self._label.setMaximumWidth(safe_width)
+        self._label.updateGeometry()
+        self.updateGeometry()
+
     def _build(self, text: str) -> None:
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(10, 4, 10, 4)
+        outer.setContentsMargins(0, 3, 0, 3)
         outer.setSpacing(0)
 
         self._label = QLabel(text)
@@ -113,19 +163,17 @@ class _MessageBubble(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        self._label.setMaximumWidth(CHAT_BUBBLE_MAX_WIDTH)
-        self._label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Minimum)
+        self._label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._label.setMaximumWidth(_HARD_MAX_BUBBLE_WIDTH)
         self._label.setStyleSheet(get_bubble_style(self._role))
         apply_bubble_shadow(self._label, blur_radius=16.0, y_offset=2.5)
 
-        spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-
         if self._role == "user":
-            outer.addSpacerItem(spacer)
-            outer.addWidget(self._label)
+            outer.addStretch(1)
+            outer.addWidget(self._label, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         else:
-            outer.addWidget(self._label)
-            outer.addSpacerItem(spacer)
+            outer.addWidget(self._label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            outer.addStretch(1)
 
 
 class _ChatWorker(QObject):
@@ -177,8 +225,8 @@ class ChatPage(QWidget):
     logout_requested = pyqtSignal()
     back_requested = pyqtSignal()
 
-    _FIRST_BUBBLE_DELAY_MS = 360
-    _NEXT_BUBBLE_DELAY_MS = 560
+    _FIRST_BUBBLE_DELAY_MS = 320
+    _NEXT_BUBBLE_DELAY_MS = 420
     _SCROLL_ANIMATION_MS = 260
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -198,6 +246,7 @@ class ChatPage(QWidget):
 
         self._pending_chunks: list[str] = []
         self._typing_bubble: _MessageBubble | None = None
+        self._bubble_widgets: list[_MessageBubble] = []
 
         self._thread: QThread | None = None
         self._worker: _ChatWorker | None = None
@@ -219,18 +268,20 @@ class ChatPage(QWidget):
     def _build_header(self) -> QWidget:
         header = QFrame()
         header.setObjectName("chatHeader")
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         outer = QHBoxLayout(header)
-        outer.setContentsMargins(CHAT_SIDE_PADDING, 16, CHAT_SIDE_PADDING, 14)
+        outer.setContentsMargins(20, 14, 20, 12)
         outer.setSpacing(0)
 
         inner = QFrame()
         inner.setObjectName("headerInner")
+        inner.setMaximumWidth(_QT_MAX)
         inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         layout = QVBoxLayout(inner)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
@@ -238,11 +289,11 @@ class ChatPage(QWidget):
 
         self._title_label = QLabel(APP_NAME)
         self._title_label.setObjectName("titleLabel")
-        top_row.addWidget(self._title_label)
+        top_row.addWidget(self._title_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self._session_label = QLabel("")
         self._session_label.setObjectName("sessionLabel")
-        top_row.addWidget(self._session_label)
+        top_row.addWidget(self._session_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         top_row.addStretch(1)
         layout.addLayout(top_row)
@@ -271,8 +322,7 @@ class ChatPage(QWidget):
         mode_row.addStretch(1)
         layout.addLayout(mode_row)
 
-        outer.addWidget(inner, 1)
-
+        outer.addWidget(inner)
         return header
 
     def _build_conversation(self) -> QScrollArea:
@@ -285,39 +335,41 @@ class ChatPage(QWidget):
         self._conversation_outer = QWidget()
         self._conversation_outer.setObjectName("conversationOuter")
 
-        outer_layout = QHBoxLayout(self._conversation_outer)
-        outer_layout.setContentsMargins(CHAT_SIDE_PADDING, 0, CHAT_SIDE_PADDING, 0)
+        outer_layout = QVBoxLayout(self._conversation_outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
         self._conversation_host = QWidget()
         self._conversation_host.setObjectName("conversationHost")
+        self._conversation_host.setMaximumWidth(_QT_MAX)
         self._conversation_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._conversation_layout = QVBoxLayout(self._conversation_host)
         self._conversation_layout.setContentsMargins(
-            0,
+            _ROW_SIDE_PADDING,
             CHAT_TOP_PADDING,
-            0,
+            _ROW_SIDE_PADDING,
             CHAT_BOTTOM_PADDING,
         )
-        self._conversation_layout.setSpacing(5)
+        self._conversation_layout.setSpacing(7)
         self._conversation_layout.addStretch(1)
 
-        outer_layout.addWidget(self._conversation_host, 1)
-
+        outer_layout.addWidget(self._conversation_host)
         self._scroll.setWidget(self._conversation_outer)
         return self._scroll
 
     def _build_footer(self) -> QWidget:
         footer = QFrame()
         footer.setObjectName("footerFrame")
+        footer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         outer = QHBoxLayout(footer)
-        outer.setContentsMargins(CHAT_SIDE_PADDING, 10, CHAT_SIDE_PADDING, 22)
+        outer.setContentsMargins(20, 10, 20, 18)
         outer.setSpacing(0)
 
         inner = QFrame()
         inner.setObjectName("footerInner")
+        inner.setMaximumWidth(_QT_MAX)
         inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         layout = QVBoxLayout(inner)
@@ -332,30 +384,32 @@ class ChatPage(QWidget):
         self._input_container = QFrame()
         self._input_container.setObjectName("inputContainer")
         self._input_container.setStyleSheet(CHAT_INPUT_CONTAINER)
+        self._input_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         apply_input_shadow(self._input_container, blur_radius=22.0, y_offset=4.0)
 
         input_row = QHBoxLayout(self._input_container)
-        input_row.setContentsMargins(12, 9, 9, 9)
+        input_row.setContentsMargins(12, 9, 10, 9)
         input_row.setSpacing(10)
 
         self._input = _MessageInput()
         self._input.setObjectName("chatInput")
         self._input.setPlaceholderText("Type a message")
-        self._input.setFixedHeight(54)
+        self._input.setMinimumHeight(_COMPOSER_MIN_HEIGHT)
+        self._input.setMaximumHeight(_COMPOSER_MAX_HEIGHT)
+        self._input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._input.send_requested.connect(self._on_send)
+        self._input.textChanged.connect(self._sync_input_height)
         input_row.addWidget(self._input, 1)
 
         self._send_button = QPushButton("Send")
         self._send_button.setObjectName("sendButton")
-        self._send_button.setFixedHeight(48)
-        self._send_button.setMinimumWidth(104)
+        self._send_button.setFixedHeight(46)
+        self._send_button.setMinimumWidth(108)
         self._send_button.clicked.connect(self._on_send)
-        input_row.addWidget(self._send_button)
+        input_row.addWidget(self._send_button, 0, Qt.AlignmentFlag.AlignBottom)
 
         layout.addWidget(self._input_container)
-
-        outer.addWidget(inner, 1)
-
+        outer.addWidget(inner)
         return footer
 
     def _apply_styles(self) -> None:
@@ -394,7 +448,7 @@ class ChatPage(QWidget):
                 color: {C.MUTED};
                 font-size: 13px;
                 background: transparent;
-                padding-top: 4px;
+                padding-top: 2px;
             }}
 
             QScrollArea#conversationScroll,
@@ -409,7 +463,7 @@ class ChatPage(QWidget):
                 color: {C.INPUT_TEXT};
                 border: 1px solid #342E1F;
                 border-radius: 17px;
-                padding: 13px 14px;
+                padding: 12px 14px;
                 font-size: 14px;
             }}
 
@@ -477,6 +531,39 @@ class ChatPage(QWidget):
             """
         )
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._refresh_bubble_widths)
+
+    def _sync_input_height(self) -> None:
+        document_height = int(self._input.document().size().height())
+        target_height = max(_COMPOSER_MIN_HEIGHT, min(_COMPOSER_MAX_HEIGHT, document_height + 18))
+        self._input.setFixedHeight(target_height)
+
+    def _current_bubble_width(self) -> int:
+        viewport_width = self._scroll.viewport().width() if hasattr(self, "_scroll") else self.width()
+        usable = max(420, viewport_width - (_ROW_SIDE_PADDING * 2) - 24)
+
+        if usable >= 1200:
+            ratio = 0.50
+        elif usable >= 900:
+            ratio = 0.56
+        else:
+            ratio = 0.62
+
+        return max(_MIN_BUBBLE_WIDTH, min(int(usable * ratio), _HARD_MAX_BUBBLE_WIDTH))
+
+    def _refresh_bubble_widths(self) -> None:
+        bubble_width = self._current_bubble_width()
+
+        for bubble in list(self._bubble_widgets):
+            if bubble is None:
+                continue
+            if bubble.role == "typing":
+                bubble.set_bubble_max_width(min(230, bubble_width))
+            else:
+                bubble.set_bubble_max_width(bubble_width)
+
     def start_session(
         self,
         user_name: str,
@@ -512,6 +599,7 @@ class ChatPage(QWidget):
         self._set_input_enabled(True)
         self._set_mode_switching_enabled(True)
         self._input.clear()
+        self._sync_input_height()
         self._input.setFocus()
 
     def reset_session(self) -> None:
@@ -534,6 +622,7 @@ class ChatPage(QWidget):
         self._session_label.clear()
         self._status_label.clear()
         self._input.clear()
+        self._sync_input_height()
         self._set_input_enabled(True)
         self._set_mode_switching_enabled(True)
 
@@ -584,9 +673,6 @@ class ChatPage(QWidget):
     def _active_history(self) -> list[dict[str, str]]:
         return self._mode_histories.setdefault(self._mode, [])
 
-    def _worker_history(self) -> list[dict[str, str]]:
-        return self._mode_histories.setdefault(self._active_worker_mode, [])
-
     def _on_send(self) -> None:
         text = self._input.toPlainText().strip()
 
@@ -599,6 +685,7 @@ class ChatPage(QWidget):
         self._active_worker_mode = self._mode
 
         self._input.clear()
+        self._sync_input_height()
         self._append_bubble(text, role="user")
         self._push_history("user", text, mode=self._active_worker_mode)
 
@@ -643,7 +730,7 @@ class ChatPage(QWidget):
 
         self._push_history("assistant", clean_reply, mode=self._active_worker_mode)
 
-        chunks = split_reply_into_chunks(clean_reply, max_chunks=3)
+        chunks = split_reply_into_chunks(clean_reply, preferred_max_chunks=2)
         self._pending_chunks = chunks or [clean_reply]
 
         QTimer.singleShot(self._FIRST_BUBBLE_DELAY_MS, self._show_next_reply_chunk)
@@ -685,6 +772,9 @@ class ChatPage(QWidget):
             return
 
         self._typing_bubble = _MessageBubble("Companion is typing…", "typing")
+        self._bubble_widgets.append(self._typing_bubble)
+        self._typing_bubble.set_bubble_max_width(min(230, self._current_bubble_width()))
+
         insert_index = self._conversation_layout.count() - 1
         self._conversation_layout.insertWidget(insert_index, self._typing_bubble)
         QTimer.singleShot(40, self._scroll_to_bottom)
@@ -693,18 +783,28 @@ class ChatPage(QWidget):
         self._status_label.clear()
 
         if self._typing_bubble is not None:
+            if self._typing_bubble in self._bubble_widgets:
+                self._bubble_widgets.remove(self._typing_bubble)
             self._conversation_layout.removeWidget(self._typing_bubble)
             self._typing_bubble.deleteLater()
             self._typing_bubble = None
 
-    def _append_bubble(self, text: str, role: str) -> None:
-        self._hide_typing()
+    def _append_bubble(self, text: str, role: str, auto_scroll: bool = True) -> None:
+        if role != "typing":
+            self._hide_typing()
 
         bubble = _MessageBubble(text, role)
+        bubble.set_bubble_max_width(
+            min(230, self._current_bubble_width()) if role == "typing" else self._current_bubble_width()
+        )
+
+        self._bubble_widgets.append(bubble)
+
         insert_index = self._conversation_layout.count() - 1
         self._conversation_layout.insertWidget(insert_index, bubble)
 
-        QTimer.singleShot(35, self._scroll_to_bottom)
+        if auto_scroll:
+            QTimer.singleShot(35, self._scroll_to_bottom)
 
     def _render_active_history(self) -> None:
         self._clear_conversation()
@@ -717,13 +817,17 @@ class ChatPage(QWidget):
                 continue
 
             if role == "assistant":
-                for chunk in split_reply_into_chunks(content, max_chunks=3):
-                    self._append_bubble(chunk, role="assistant")
+                for chunk in split_reply_into_chunks(content, preferred_max_chunks=2):
+                    self._append_bubble(chunk, role="assistant", auto_scroll=False)
             else:
-                self._append_bubble(content, role=role)
+                self._append_bubble(content, role=role, auto_scroll=False)
+
+        self._refresh_bubble_widths()
+        QTimer.singleShot(10, self._scroll_to_bottom)
 
     def _clear_conversation(self) -> None:
         self._typing_bubble = None
+        self._bubble_widgets.clear()
 
         while self._conversation_layout.count() > 1:
             item = self._conversation_layout.takeAt(0)

@@ -25,14 +25,17 @@ Rules you never break:
 - Never make up memories, facts, or context that were not provided.
 - In higher-risk situations, be calm, direct, practical, and steady.
 - Keep replies natural and chat-friendly.
-- For low-risk turns, usually keep the reply to 1 to 3 short paragraphs, about 2 to 3 chat bubbles worth of text.
+- For low-risk turns, prefer 1 short message most of the time, sometimes 2 short paragraphs or 2 chat bubbles when it helps clarity.
+- Only go to 3 or more paragraphs or chat bubbles when the user clearly needs more careful guidance or asks for more detail.
 - Avoid mini-essays unless the user clearly asks for more detail or the situation needs more careful guidance.
 - Ask at most one gentle follow-up question when it truly helps.
+- If you ask a question, make it feel warm, open, and easy to answer. The user should feel safe saying as much or as little as they want.
+- Do not stack multiple questions.
 - Do not start the reply with the word "I".
 - In Help Someone mode, speak to the user as the helper.
 - In Help Someone mode, never act as if the user is the distressed person.
 - In Help Someone mode, never address the other person as if they are the user.
-- If emojis are allowed, use at most 0 to 2 in total and place them naturally, not as decoration.
+- If emojis are allowed, use at most 0 to 3 in total and place them naturally inside the message, not as decoration or as a final emoji-only line.
 - Words like "buddy" can be used sparingly, only when they feel natural and fit the moment.
 """
 
@@ -47,7 +50,7 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
         "content": (
             "Hey, that sounds really heavy. Carrying that around day after day can wear anyone down.\n\n"
             "What you are feeling matters, even if your mind is being harsh with you right now. "
-            "What has been hitting the hardest lately?"
+            "If you want, you can tell me what has been hitting the hardest lately."
         ),
     },
     {
@@ -59,7 +62,7 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
         "content": (
             "Ugh, exam stress can make your whole body feel stuck on high alert.\n\n"
             "When your mind will not slow down, even resting gets exhausting. "
-            "Has it been building for a while, or did it spike recently?"
+            "If you want, tell me whether it has been building for a while or spiked recently."
         ),
     },
     {
@@ -84,7 +87,7 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
         "content": (
             "That is a hard place to be, and it makes sense that you are worried about them.\n\n"
             "Try gentle contact without pressure, like a short check-in that shows care and leaves the door open. "
-            "What kind of changes have you noticed in them lately?"
+            "If you want, tell me what kind of changes you have noticed in them lately."
         ),
     },
     {
@@ -198,10 +201,11 @@ def _emoji_instruction(plan: dict[str, Any] | None) -> str:
         return "Do not use any emojis."
 
     return (
-        "You may use 0 to 2 simple, warm emojis in total. "
+        "You may use 0 to 3 simple, warm emojis in total. "
         "Use them naturally inside the message when they fit. "
         "Do not dump them at the very end, do not stack them, "
-        "and do not use emojis in the heaviest or most serious lines."
+        "and do not create a separate emoji-only line or message. "
+        "In heavier or grief-related moments, keep emoji use very light and gentle."
     )
 
 
@@ -210,6 +214,14 @@ def _buddy_instruction() -> str:
         "Words like 'buddy' or similar casual terms can be used sparingly, "
         "only when they feel natural and fit the relationship and moment. "
         "Do not force them or repeat them."
+    )
+
+
+def _warm_question_instruction() -> str:
+    return (
+        "If you ask a follow-up question, make it soft, inviting, and low-pressure. "
+        "Prefer wording like 'if you want,' 'if you feel like it,' or 'you can tell me'. "
+        "Do not interrogate the user or ask multiple questions at once."
     )
 
 
@@ -300,9 +312,11 @@ def build_generation_system_prompt(
             "Then give simple, practical guidance the user can actually use.\n"
             "When helpful, include one or two short example lines the user could say.\n"
             "Keep the reply concise and easy to read.\n"
+            "Prefer 1 compact message or 2 short paragraphs in most normal turns.\n"
             "Do not overload the message with too many steps or long explanations.\n"
             "Do not sound robotic, preachy, or like a brochure.\n"
             "Always keep the helper perspective intact.\n"
+            f"{_warm_question_instruction()}\n"
             f"{_buddy_instruction()}\n"
             f"{_emoji_instruction(plan)}"
         )
@@ -311,9 +325,12 @@ def build_generation_system_prompt(
             "Reply like a close, emotionally intelligent friend.\n"
             "Lead with understanding before advice.\n"
             "Reflect the feeling in a human, natural way.\n"
-            "For low-risk turns, keep it fairly short and easy to read.\n"
+            "Make the user feel safe to open up without pressure.\n"
+            "Prefer 1 compact message in most normal turns. Use 2 short paragraphs when it helps warmth or clarity.\n"
+            "For low-risk turns, keep it short, easy to read, and emotionally present.\n"
             "Do not overload the message with too many steps or long explanations.\n"
             "Do not sound robotic, preachy, or like a textbook.\n"
+            f"{_warm_question_instruction()}\n"
             f"{_buddy_instruction()}\n"
             f"{_emoji_instruction(plan)}"
         )
@@ -354,6 +371,7 @@ def build_rewrite_instruction(
     emoji_rule = _emoji_instruction(plan)
     buddy_rule = _buddy_instruction()
     emotion_rule = _emotion_instruction(plan)
+    warm_question_rule = _warm_question_instruction()
 
     if normalized_mode == "help_someone":
         mode_rule = (
@@ -368,6 +386,7 @@ def build_rewrite_instruction(
         mode_rule = (
             "Rewrite for a user seeking personal support. "
             "Sound emotionally present, reassuring, warm, and gently human. "
+            "Make the reply feel easy to talk back to. "
             "Do not become overly instructional too quickly."
         )
 
@@ -394,6 +413,7 @@ def build_rewrite_instruction(
         [
             emoji_rule,
             buddy_rule,
+            warm_question_rule,
             "Make it feel like a caring friend wrote it, not a bot.",
             "Remove robotic, stiff, lecture-like, or brochure-style phrasing.",
             "Use warm, conversational wording.",
@@ -401,6 +421,9 @@ def build_rewrite_instruction(
             "Avoid diagnosis, jargon, long lectures, and repetitive reassurance.",
             "Do not start with the word 'I'.",
             "Keep it concise and easy to read in chat bubbles.",
+            "Most of the time, keep it to 1 compact message or 2 short paragraphs.",
+            "Only use 3 or more paragraphs if the situation truly needs it.",
+            "Do not end with a separate emoji-only line.",
             "",
             f"Draft:\n{draft.strip()}",
             "",
