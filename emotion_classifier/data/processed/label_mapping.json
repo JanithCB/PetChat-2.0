@@ -1,0 +1,74 @@
+{
+    "label2id": {
+        "happy": 0,
+        "calm": 1,
+        "sad": 2,
+        "angry": 3,
+        "anxious": 4,
+        "stressed": 5,
+        "confused": 6
+    },
+    "id2label": {
+        "0": "happy",
+        "1": "calm",
+        "2": "sad",
+        "3": "angry",
+        "4": "anxious",
+        "5": "stressed",
+        "6": "confused"
+    },
+    "ui_label_names": [
+        "happy",
+        "calm",
+        "sad",
+        "angry",
+        "anxious",
+        "stressed",
+        "confused"
+    ],
+    "ui_mapping": {
+        "happy": [
+            "admiration",
+            "amusement",
+            "approval",
+            "desire",
+            "excitement",
+            "gratitude",
+            "joy",
+            "love",
+            "optimism",
+            "pride"
+        ],
+        "calm": [
+            "neutral",
+            "relief",
+            "caring"
+        ],
+        "sad": [
+            "disappointment",
+            "embarrassment",
+            "grief",
+            "remorse",
+            "sadness"
+        ],
+        "angry": [
+            "anger",
+            "annoyance",
+            "disapproval",
+            "disgust"
+        ],
+        "anxious": [
+            "fear"
+        ],
+        "stressed": [
+            "nervousness"
+        ],
+        "confused": [
+            "confusion",
+            "curiosity",
+            "realization",
+            "surprise"
+        ]
+    },
+    "target_samples_per_class": 2000
+}
