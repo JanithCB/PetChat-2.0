@@ -52,6 +52,13 @@ LOG_DIR: Path = Path(
     os.environ.get("LOG_DIR", str(_PROJECT_ROOT / "data" / "logs"))
 ).expanduser()
 
+EMOTION_MODEL_DIR: Path = Path(
+    os.environ.get(
+        "EMOTION_MODEL_DIR",
+        str(_PROJECT_ROOT / "emotion_classifier" / "models" / "emotion_model_v2"),
+    )
+).expanduser()
+
 LOG_FILE: Path = LOG_DIR / "app.log"
 EVAL_LOG_FILE: Path = LOG_DIR / "eval.log"
 EVAL_PROMPTS_FILE: Path = _PACKAGE_ROOT / "eval" / "eval_prompts.json"

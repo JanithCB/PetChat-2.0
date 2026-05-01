@@ -136,9 +136,16 @@ _classifier: Optional[EmotionClassifier] = None
 def _default_model_dir() -> str:
     """
     Default model folder:
-    src/core/emotion_model/
+    emotion_classifier/models/emotion_model_v2/
     """
-    return str(Path(__file__).resolve().parent / "emotion_model")
+    try:
+        from src.config import EMOTION_MODEL_DIR  # noqa: PLC0415
+
+        return str(EMOTION_MODEL_DIR)
+    except Exception:
+        # Fallback if config is unavailable
+        root = Path(__file__).resolve().parent.parent.parent
+        return str(root / "emotion_classifier" / "models" / "emotion_model_v2")
 
 
 def _classifier_enabled() -> bool:
