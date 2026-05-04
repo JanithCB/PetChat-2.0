@@ -2,10 +2,10 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+emotion_classifier/models
 # C extensions
 *.so
-
+emotion_classifier/training_outputs
 # Distribution / packaging
 .Python
 build/
