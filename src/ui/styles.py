@@ -34,6 +34,12 @@ class C:
     ACCENT_SOFT_QSS = "#2A2410"
     SHADOW = QColor(0, 0, 0, 110)
 
+    USER_BUBBLE_HOVER = "#FFD95C"
+    BOT_BUBBLE_ALT = "#15140F"
+    BOT_BORDER = "#2A261C"
+    TYPING_BG = "#15130F"
+    ERROR_BG = "#1B1010"
+
 
 FONT_FAMILY = "Segoe UI"
 FONT_SIZE_XS = 10
@@ -43,19 +49,16 @@ FONT_SIZE_MD = 15
 FONT_SIZE_LG = 20
 FONT_SIZE_XL = 30
 
-
 CHAT_MAX_WIDTH = 1600
 CHAT_BUBBLE_MAX_WIDTH = 760
 CHAT_SIDE_PADDING = 20
 CHAT_TOP_PADDING = 18
 CHAT_BOTTOM_PADDING = 16
 
-
 BUBBLE_RADIUS = 14
 BUBBLE_PADDING_Y = 10
 BUBBLE_PADDING_X = 14
 BUBBLE_LINE_HEIGHT = 1.42
-
 
 CARD_RADIUS = 18
 INPUT_RADIUS = 20
@@ -307,7 +310,7 @@ QFrame {{
 
 USER_BUBBLE = f"""
 QLabel {{
-    background-color: #FFD34D;
+    background-color: {C.USER_BUBBLE};
     color: {C.USER_TEXT};
     border: none;
     border-radius: {BUBBLE_RADIUS}px;
@@ -318,12 +321,11 @@ QLabel {{
 }}
 """
 
-
 ASSISTANT_BUBBLE = f"""
 QLabel {{
-    background-color: #171612;
+    background-color: {C.BOT_BUBBLE if C.BOT_BUBBLE else C.BOT_BUBBLE_ALT};
     color: {C.BOT_TEXT};
-    border: 1px solid #2A261C;
+    border: 1px solid {C.BOT_BORDER};
     border-radius: {BUBBLE_RADIUS}px;
     padding: {BUBBLE_PADDING_Y}px {BUBBLE_PADDING_X}px;
     font-size: {FONT_SIZE_BASE}px;
@@ -332,10 +334,9 @@ QLabel {{
 }}
 """
 
-
 TYPING_INDICATOR_BUBBLE = f"""
 QLabel {{
-    background-color: #15130F;
+    background-color: {C.TYPING_BG};
     color: {C.MUTED};
     border: 1px solid {C.SOFT_BORDER};
     border-radius: 14px;
@@ -345,10 +346,9 @@ QLabel {{
 }}
 """
 
-
 ERROR_BUBBLE = f"""
 QLabel {{
-    background-color: #1B1010;
+    background-color: {C.ERROR_BG};
     color: {C.DANGER};
     border: 1px solid {C.DANGER};
     border-radius: {BUBBLE_RADIUS}px;
