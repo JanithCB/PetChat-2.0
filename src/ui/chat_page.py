@@ -178,7 +178,6 @@ class _MessageBubble(QWidget):
 
 class _ChatWorker(QObject):
     reply_ready = pyqtSignal(str)
-    turn_completed = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -212,7 +211,6 @@ class _ChatWorker(QObject):
 
             if isinstance(result, dict):
                 reply = str(result.get("final_reply", "")).strip()
-                self.turn_completed.emit(result)
             else:
                 reply = str(result).strip()
 
@@ -298,11 +296,6 @@ class ChatPage(QWidget):
         top_row.addWidget(self._session_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         top_row.addStretch(1)
-
-        self._emotion_badge = QLabel("")
-        self._emotion_badge.setObjectName("emotionBadge")
-        self._emotion_badge.setVisible(False)
-        top_row.addWidget(self._emotion_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(top_row)
 
         mode_row = QHBoxLayout()
@@ -458,18 +451,6 @@ class ChatPage(QWidget):
                 padding-top: 2px;
             }}
 
-            QLabel#emotionBadge {{
-                background-color: #1A1A1A;
-                color: {C.MUTED};
-                border: 1px solid {C.DIVIDER};
-                border-radius: 12px;
-                padding: 4px 12px;
-                font-size: 11px;
-                font-weight: 800;
-                text-transform: uppercase;
-                letter-spacing: 0.6px;
-            }}
-
             QScrollArea#conversationScroll,
             QWidget#conversationOuter,
             QWidget#conversationHost {{
@@ -615,7 +596,6 @@ class ChatPage(QWidget):
         self._set_mode_buttons()
         self._session_label.setText(self._session_summary())
         self._status_label.clear()
-        self._emotion_badge.setVisible(False)
         self._set_input_enabled(True)
         self._set_mode_switching_enabled(True)
         self._input.clear()
@@ -641,7 +621,6 @@ class ChatPage(QWidget):
         self._set_mode_buttons()
         self._session_label.clear()
         self._status_label.clear()
-        self._emotion_badge.setVisible(False)
         self._input.clear()
         self._sync_input_height()
         self._set_input_enabled(True)
@@ -733,7 +712,6 @@ class ChatPage(QWidget):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.reply_ready.connect(self._on_reply_ready)
-        self._worker.turn_completed.connect(self._on_turn_completed)
         self._worker.error_occurred.connect(self._on_error)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)
@@ -745,36 +723,6 @@ class ChatPage(QWidget):
     def _on_thread_finished(self) -> None:
         self._thread = None
         self._worker = None
-
-    @pyqtSlot(dict)
-    def _on_turn_completed(self, result: dict) -> None:
-        emotion = result.get("detected_emotion")
-        self._update_emotion_display(emotion)
-
-    def _update_emotion_display(self, emotion: str | None) -> None:
-        if not emotion or emotion == "unknown":
-            self._emotion_badge.setVisible(False)
-            return
-
-        label = str(emotion).strip().lower()
-        self._emotion_badge.setText(label)
-        self._emotion_badge.setVisible(True)
-
-        # Dynamic styling based on emotion
-        styles = {
-            "happy": "background-color: #1B3B12; color: #9DFF8A; border: 1px solid #2D5F1E;",
-            "sad": "background-color: #0F1F38; color: #8AB4FF; border: 1px solid #1E3A5F;",
-            "angry": "background-color: #380F0F; color: #FF8A8A; border: 1px solid #5F1E1E;",
-            "anxious": ("background-color: #2E2211; color: #FFD28A; border: 1px solid #4F3A1E;"
-                        if label == "anxious" else
-                        "background-color: #25123B; color: #D28AFF; border: 1px solid #3F1E5F;"), # stressed
-            "stressed": "background-color: #25123B; color: #D28AFF; border: 1px solid #3F1E5F;",
-            "confused": "background-color: #113333; color: #8AFFFF; border: 1px solid #1E5F5F;",
-            "calm": "background-color: #113322; color: #8AFFD2; border: 1px solid #1E5F3F;",
-        }
-
-        specific_style = styles.get(label, "background-color: #1A1A1A; color: #A8A8A8; border: 1px solid #333333;")
-        self._emotion_badge.setStyleSheet(specific_style)
 
     @pyqtSlot(str)
     def _on_reply_ready(self, reply: str) -> None:

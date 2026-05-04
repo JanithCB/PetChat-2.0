@@ -50,8 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-emotion_classifier/training_outputs
-emotion_classifier/models
+
 # Translations
 *.mo
 *.pot

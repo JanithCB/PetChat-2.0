@@ -3,10 +3,6 @@ python-dotenv
 supabase
 numpy
 faiss-cpu
-pandas
-matplotlib
-scikit-learn
-torch
 transformers
-datasets
-accelerate
+torch
+safetensors
