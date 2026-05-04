@@ -23,56 +23,24 @@ Rules you never break:
 - Never minimise, shame, or dismiss feelings.
 - Never use cold, academic, clinical, robotic, or lecture-like language.
 - Never make up memories, facts, or context that were not provided.
-- Safety stays above tone, style, emotion labels, or creativity.
 - In higher-risk situations, be calm, direct, practical, and steady.
 - Keep replies natural and chat-friendly.
-- Match the size and energy of the user's message instead of defaulting to a long support speech.
-- For greetings, tiny messages, and low-risk casual chat, keep replies short and natural by default.
-- Prefer 1 compact message most of the time; use 2 short paragraphs only when it clearly helps rhythm, warmth, or clarity.
-- Only go longer when the user clearly needs more careful guidance, asks for more detail, or the situation is more serious.
+- For low-risk turns, prefer 1 short message most of the time, sometimes 2 short paragraphs or 2 chat bubbles when it helps clarity.
+- Only go to 3 or more paragraphs or chat bubbles when the user clearly needs more careful guidance or asks for more detail.
 - Avoid mini-essays unless the user clearly asks for more detail or the situation needs more careful guidance.
-- For emotional messages, validate first, then ask one gentle follow-up question or offer one small next step when helpful.
-- Avoid piling validation, advice, reassurance, and multiple invitations into the same turn unless the situation clearly needs it.
 - Ask at most one gentle follow-up question when it truly helps.
-- If you ask a question, make it feel warm, open, and easy to answer.
+- If you ask a question, make it feel warm, open, and easy to answer. The user should feel safe saying as much or as little as they want.
 - Do not stack multiple questions.
 - Do not start the reply with the word "I".
 - In Help Someone mode, speak to the user as the helper.
 - In Help Someone mode, never act as if the user is the distressed person.
 - In Help Someone mode, never address the other person as if they are the user.
-- In Help Someone mode, practical coaching and one or two short example lines are welcome when useful.
-- Emojis are optional and only for low-risk, casual, natural moments.
-- If emojis are allowed, use at most 0 to 2 in total and place them naturally inside the message, not as decoration or as a final emoji-only line.
-- Do not use emojis in serious, high-risk, crisis, or heavily grief-focused replies.
+- If emojis are allowed, use at most 0 to 3 in total and place them naturally inside the message, not as decoration or as a final emoji-only line.
 - Words like "buddy" can be used sparingly, only when they feel natural and fit the moment.
 """
 
 
 FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
-    {
-        "role": "user",
-        "content": "hi",
-    },
-    {
-        "role": "assistant",
-        "content": "Hey 🙂 How's your day going?",
-    },
-    {
-        "role": "user",
-        "content": "how are you",
-    },
-    {
-        "role": "assistant",
-        "content": "Doing okay, thanks for asking 🙂 How are you doing?",
-    },
-    {
-        "role": "user",
-        "content": "I had a pretty decent day today",
-    },
-    {
-        "role": "assistant",
-        "content": "Aw, that's nice 🙂 What made it a decent day?",
-    },
     {
         "role": "user",
         "content": "I just feel so worthless lately. Like nothing I do matters.",
@@ -93,7 +61,8 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
         "role": "assistant",
         "content": (
             "Ugh, exam stress can make your whole body feel stuck on high alert.\n\n"
-            "Want to tell me if it has been building for a while, or if it spiked recently?"
+            "When your mind will not slow down, even resting gets exhausting. "
+            "If you want, tell me whether it has been building for a while or spiked recently."
         ),
     },
     {
@@ -118,7 +87,7 @@ FRIEND_STYLE_EXAMPLES: list[dict[str, str]] = [
         "content": (
             "That is a hard place to be, and it makes sense that you are worried about them.\n\n"
             "Try gentle contact without pressure, like a short check-in that shows care and leaves the door open. "
-            "You could say, 'No pressure to reply right away, but I care about you and I am here.'"
+            "If you want, tell me what kind of changes you have noticed in them lately."
         ),
     },
     {
@@ -141,6 +110,7 @@ SAFETY_REPLY_HIGH: str = (
     "Please contact a crisis line, emergency service, or a trusted person immediately, and stay with someone if you can. "
     "If you are in Sri Lanka, you can contact Sumithrayo on 0800 111 000."
 )
+
 
 SAFETY_REPLY_MEDIUM: str = (
     "It sounds like things are feeling really intense right now. "
@@ -208,13 +178,6 @@ def _format_plan(plan: dict[str, Any] | None) -> str:
         "follow_up_style",
         "detected_emotion",
         "emotion_confidence",
-        "message_kind",
-        "reply_length",
-        "ask_follow_up",
-        "bubble_strategy",
-        "user_message_length",
-        "tone_hint",
-        "risk_level",
     ]:
         value = plan.get(key)
         if value is None or value == "":
@@ -232,27 +195,17 @@ def _format_plan(plan: dict[str, Any] | None) -> str:
     return "\n".join(lines) if lines else "- none"
 
 
-def _plan_risk_level(plan: dict[str, Any] | None, fallback: str = "low") -> str:
-    raw = _safe_text((plan or {}).get("risk_level") or (plan or {}).get("safety_level")).lower()
-    if raw in {"high", "medium", "low"}:
-        return raw
-    return fallback
-
-
-def _emoji_instruction(plan: dict[str, Any] | None, risk_level: str = "low") -> str:
-    if risk_level in {"high", "medium"}:
-        return "Do not use any emojis."
-
+def _emoji_instruction(plan: dict[str, Any] | None) -> str:
     use_emoji = bool((plan or {}).get("use_emoji", False))
     if not use_emoji:
-        return "Skip emojis for this turn."
+        return "Do not use any emojis."
 
     return (
-        "You may use 0 to 2 simple, warm emojis in total, mainly for low-risk casual turns. "
+        "You may use 0 to 3 simple, warm emojis in total. "
         "Use them naturally inside the message when they fit. "
         "Do not dump them at the very end, do not stack them, "
         "and do not create a separate emoji-only line or message. "
-        "If the moment becomes heavier, more serious, or grief-focused, skip emojis."
+        "In heavier or grief-related moments, keep emoji use very light and gentle."
     )
 
 
@@ -272,16 +225,6 @@ def _warm_question_instruction() -> str:
     )
 
 
-def _conversation_rhythm_instruction() -> str:
-    return (
-        "Keep the flow natural. "
-        "Use one compact message by default. "
-        "Use 2 short paragraphs only when that improves rhythm, warmth, or clarity. "
-        "If a follow-up question helps, it can stand as a light final line. "
-        "Do not split one heavy response into several dense bubbles."
-    )
-
-
 def _build_mode_instruction(mode: str) -> str:
     normalized = _normalize_mode(mode)
 
@@ -295,7 +238,6 @@ def _build_mode_instruction(mode: str) -> str:
             "Keep the user/helper distinction intact at all times.\n"
             "Never write as if the struggling friend is the one chatting with you.\n"
             "Never say things that imply you are directly supporting the third person in the chat.\n"
-            "Longer replies are allowed only when they are clearly practical and useful.\n"
             "When helpful, offer one or two short example lines the user could send or say."
         )
 
@@ -304,7 +246,6 @@ def _build_mode_instruction(mode: str) -> str:
         "The user is speaking about their own thoughts, feelings, or struggles.\n"
         "Focus first on empathy, validation, and emotional steadiness.\n"
         "Offer one small helpful next step when appropriate.\n"
-        "Low-risk casual chat should feel natural, brief, and companion-like rather than overly therapeutic.\n"
         "Keep the tone personal, warm, human, and non-clinical."
     )
 
@@ -348,86 +289,6 @@ def _emotion_instruction(plan: dict[str, Any] | None) -> str:
     return mapping.get(detected, "")
 
 
-def _message_shape_instruction(mode: str, plan: dict[str, Any] | None) -> str:
-    normalized_mode = _normalize_mode(mode)
-    message_kind = _safe_text((plan or {}).get("message_kind")).lower()
-    reply_length = _safe_text((plan or {}).get("reply_length")).lower()
-    user_message_length = _safe_text((plan or {}).get("user_message_length")).lower()
-    ask_follow_up = bool((plan or {}).get("ask_follow_up", False))
-
-    greeting_kinds = {"greeting", "hello", "hi", "how_are_you", "small_talk"}
-    casual_kinds = {"tiny", "short", "casual", "check_in", "low_risk_casual"}
-    emotional_kinds = {"emotional", "sad", "anxious", "angry", "stressed", "confused"}
-    coaching_kinds = {"coaching", "practical_support", "what_to_say", "helper_guidance"}
-
-    if message_kind in greeting_kinds:
-        if ask_follow_up:
-            return (
-                "This looks like a greeting or tiny opener. "
-                "Reply briefly and naturally, then optionally ask one short, easy follow-up question."
-            )
-        return (
-            "This looks like a greeting or tiny opener. "
-            "Reply briefly and naturally."
-        )
-
-    if normalized_mode == "help_someone" and message_kind in coaching_kinds:
-        return (
-            "This looks like a helper-coaching turn. "
-            "A slightly longer reply is okay when it stays practical, readable, and clearly useful. "
-            "One or two short example lines are welcome when they help."
-        )
-
-    if message_kind in emotional_kinds:
-        return (
-            "This looks like an emotional message. "
-            "Validate first, then ask one gentle question or offer one small next step. "
-            "Do not pile too many supportive moves into one turn."
-        )
-
-    if message_kind in casual_kinds or user_message_length in {"tiny", "short"}:
-        if ask_follow_up:
-            return (
-                "This looks like a short low-risk message. "
-                "Keep the reply compact by default, and ask at most one light follow-up only if it helps. "
-                "Do not turn it into a mini-essay."
-            )
-        return (
-            "This looks like a short low-risk message. "
-            "Keep the reply compact by default. "
-            "Do not turn it into a mini-essay."
-        )
-
-    if reply_length == "short":
-        return (
-            "Keep this reply short and natural. "
-            "Do not over-explain."
-        )
-
-    if reply_length == "medium":
-        return (
-            "Keep this reply concise but complete. "
-            "Use a little more detail only if it clearly helps."
-        )
-
-    if reply_length == "long" and normalized_mode == "help_someone":
-        return (
-            "A somewhat longer reply is okay here because practical guidance may be useful, "
-            "but keep it readable and do not ramble."
-        )
-
-    if normalized_mode == "help_someone":
-        return (
-            "Default to concise helper-focused guidance. "
-            "Go longer only when the user clearly needs practical coaching."
-        )
-
-    return (
-        "Default to a compact, warm reply. "
-        "Go longer only when the user clearly needs more support or asks for detail."
-    )
-
-
 def build_generation_system_prompt(
     mode: str,
     plan: dict[str, Any] | None,
@@ -439,12 +300,10 @@ def build_generation_system_prompt(
     Build the generation-time system prompt for the first drafting pass.
     """
     normalized_mode = _normalize_mode(mode)
-    risk_level = _plan_risk_level(plan)
     mode_block = _build_mode_instruction(normalized_mode)
     plan_block = _format_plan(plan)
     user_block = _format_user_info(user_info)
     emotion_block = _emotion_instruction(plan)
-    shape_block = _message_shape_instruction(normalized_mode, plan)
 
     if normalized_mode == "help_someone":
         tone_guidance = (
@@ -453,16 +312,13 @@ def build_generation_system_prompt(
             "Then give simple, practical guidance the user can actually use.\n"
             "When helpful, include one or two short example lines the user could say.\n"
             "Keep the reply concise and easy to read.\n"
-            "Prefer 1 compact message in most normal turns. Use 2 short paragraphs only when that improves clarity or usefulness.\n"
-            "Longer replies are okay only when practical support clearly benefits from it.\n"
+            "Prefer 1 compact message or 2 short paragraphs in most normal turns.\n"
             "Do not overload the message with too many steps or long explanations.\n"
             "Do not sound robotic, preachy, or like a brochure.\n"
             "Always keep the helper perspective intact.\n"
-            f"{shape_block}\n"
-            f"{_conversation_rhythm_instruction()}\n"
             f"{_warm_question_instruction()}\n"
             f"{_buddy_instruction()}\n"
-            f"{_emoji_instruction(plan, risk_level)}"
+            f"{_emoji_instruction(plan)}"
         )
     else:
         tone_guidance = (
@@ -470,16 +326,13 @@ def build_generation_system_prompt(
             "Lead with understanding before advice.\n"
             "Reflect the feeling in a human, natural way.\n"
             "Make the user feel safe to open up without pressure.\n"
-            "Prefer 1 compact message in most normal turns. Use 2 short paragraphs only when it helps warmth or clarity.\n"
+            "Prefer 1 compact message in most normal turns. Use 2 short paragraphs when it helps warmth or clarity.\n"
             "For low-risk turns, keep it short, easy to read, and emotionally present.\n"
-            "Low-risk casual chat should feel like a real companion, not a counselling script.\n"
             "Do not overload the message with too many steps or long explanations.\n"
             "Do not sound robotic, preachy, or like a textbook.\n"
-            f"{shape_block}\n"
-            f"{_conversation_rhythm_instruction()}\n"
             f"{_warm_question_instruction()}\n"
             f"{_buddy_instruction()}\n"
-            f"{_emoji_instruction(plan, risk_level)}"
+            f"{_emoji_instruction(plan)}"
         )
 
     prompt = (
@@ -515,13 +368,10 @@ def build_rewrite_instruction(
     normalized_mode = _normalize_mode(mode)
     stage = _safe_text((plan or {}).get("stage")) or "support"
     style = _safe_text((plan or {}).get("response_style")) or "warm and grounded"
-    final_risk = risk_level if risk_level in {"low", "medium", "high"} else _plan_risk_level(plan)
-    emoji_rule = _emoji_instruction(plan, final_risk)
+    emoji_rule = _emoji_instruction(plan)
     buddy_rule = _buddy_instruction()
     emotion_rule = _emotion_instruction(plan)
     warm_question_rule = _warm_question_instruction()
-    rhythm_rule = _conversation_rhythm_instruction()
-    shape_rule = _message_shape_instruction(normalized_mode, plan)
 
     if normalized_mode == "help_someone":
         mode_rule = (
@@ -540,20 +390,13 @@ def build_rewrite_instruction(
             "Do not become overly instructional too quickly."
         )
 
-    if final_risk == "high":
-        risk_rule = (
-            "Because risk is high, keep the tone calm, direct, safety-focused, and practical. "
-            "Do not add emojis or extra lightness."
-        )
-    elif final_risk == "medium":
-        risk_rule = (
-            "Because risk is medium, keep the tone steady, careful, supportive, and uncluttered. "
-            "Do not add emojis."
-        )
-    else:
-        risk_rule = (
-            "Risk is low, so the tone can stay soft, warm, natural, and conversational."
-        )
+    risk_rule = (
+        "Because risk is high, keep the tone calm, direct, and safety-focused."
+        if risk_level == "high"
+        else "Because risk is medium, keep the tone steady, careful, and supportive."
+        if risk_level == "medium"
+        else "Risk is low, so the tone can stay soft, warm, natural, and conversational."
+    )
 
     parts = [
         "Rewrite the draft below into a natural chat reply.",
@@ -561,7 +404,6 @@ def build_rewrite_instruction(
         f"Support stage: {stage}.",
         f"Response style: {style}.",
         risk_rule,
-        shape_rule,
     ]
 
     if emotion_rule:
@@ -572,20 +414,15 @@ def build_rewrite_instruction(
             emoji_rule,
             buddy_rule,
             warm_question_rule,
-            rhythm_rule,
             "Make it feel like a caring friend wrote it, not a bot.",
-            "Remove robotic, stiff, lecture-like, brochure-style, or over-therapeutic phrasing.",
+            "Remove robotic, stiff, lecture-like, or brochure-style phrasing.",
             "Use warm, conversational wording.",
             "A little personality is okay, but keep it grounded.",
             "Avoid diagnosis, jargon, long lectures, and repetitive reassurance.",
             "Do not start with the word 'I'.",
             "Keep it concise and easy to read in chat bubbles.",
-            "For greetings and tiny low-risk messages, shorten aggressively and keep it natural.",
-            "For emotional messages, keep the first move as validation, then one gentle question or one next step at most.",
-            "Do not pile validation, reassurance, advice, and multiple invitations into one turn unless clearly needed.",
             "Most of the time, keep it to 1 compact message or 2 short paragraphs.",
             "Only use 3 or more paragraphs if the situation truly needs it.",
-            "In Help Someone mode, practical coaching can be a bit longer when useful, but do not ramble.",
             "Do not end with a separate emoji-only line.",
             "",
             f"Draft:\n{draft.strip()}",

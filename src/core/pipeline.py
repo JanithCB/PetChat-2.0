@@ -34,111 +34,6 @@ _REWRITE_TEMPERATURE = 0.48
 _DEFAULT_DRAFT_MAX_TOKENS = 240
 _DEFAULT_REWRITE_MAX_TOKENS = 200
 
-_GREETING_KEYS = {
-    "hi",
-    "hello",
-    "hey",
-    "hey there",
-    "yo",
-    "sup",
-    "hru",
-    "how are you",
-    "hows it going",
-    "how is it going",
-    "good morning",
-    "good afternoon",
-    "good evening",
-}
-
-_HELPER_COACHING_PATTERNS = [
-    r"\bmy friend\b",
-    r"\bmy partner\b",
-    r"\bmy boyfriend\b",
-    r"\bmy girlfriend\b",
-    r"\bmy wife\b",
-    r"\bmy husband\b",
-    r"\bmy sister\b",
-    r"\bmy brother\b",
-    r"\bmy mom\b",
-    r"\bmy dad\b",
-    r"\bsomeone i care about\b",
-    r"\bsomeone close to me\b",
-    r"\bthey have been\b",
-    r"\bhe has been\b",
-    r"\bshe has been\b",
-    r"\bwhat should i say\b",
-    r"\bwhat can i say\b",
-    r"\bhow do i help\b",
-    r"\bhow can i help\b",
-    r"\bwhat can i do\b",
-    r"\bhow do i support\b",
-    r"\bhow can i support\b",
-    r"\bwithdrawing\b",
-    r"\bshutting everyone out\b",
-    r"\bwon't talk\b",
-    r"\bwont talk\b",
-    r"\bnothing matters\b",
-    r"\bhopeless\b",
-    r"\bpanic\b",
-    r"\banxiety\b",
-    r"\bdepressed\b",
-]
-
-_GUIDANCE_PATTERNS = [
-    r"\bwhat should i do\b",
-    r"\bwhat can i do\b",
-    r"\bhow do i\b",
-    r"\bhow can i\b",
-    r"\bwhat should i say\b",
-    r"\bwhat can i say\b",
-    r"\bcan you help me\b",
-    r"\bany advice\b",
-    r"\bany tips\b",
-    r"\bhow to cope\b",
-    r"\bhow to calm down\b",
-    r"\bhow to handle\b",
-    r"\bhow to support\b",
-    r"\bhow to deal with\b",
-    r"\bwhat helps\b",
-    r"\bwhat would help\b",
-    r"\bgive me steps\b",
-    r"\bpractical\b",
-    r"\btechniques\b",
-    r"\bstrategies\b",
-    r"\bexercises\b",
-]
-
-_EMOTIONAL_SIGNAL_PATTERNS = [
-    r"\bi feel\b",
-    r"\bi'm feeling\b",
-    r"\bi am feeling\b",
-    r"\bfeel really\b",
-    r"\bfeel kinda\b",
-    r"\bfeel so\b",
-    r"\banxious\b",
-    r"\banxiety\b",
-    r"\bstressed\b",
-    r"\bstress\b",
-    r"\boverwhelmed\b",
-    r"\bpanic\b",
-    r"\bsad\b",
-    r"\bempty\b",
-    r"\blonely\b",
-    r"\bworthless\b",
-    r"\bhopeless\b",
-    r"\bconfused\b",
-    r"\bupset\b",
-    r"\bfrustrated\b",
-    r"\bnot okay\b",
-    r"\bnot doing well\b",
-    r"\brough day\b",
-    r"\bbad day\b",
-    r"\bjust tired\b",
-    r"\bexhausted\b",
-]
-
-_EMOTIONAL_MESSAGE_KINDS = {"sad", "anxious", "angry", "stressed", "confused"}
-
 
 def _normalize_mode(mode: str | None) -> str:
     value = (mode or "").strip().lower()
@@ -208,188 +103,6 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"\b\w+\b", _normalize_text(text).lower()))
 
 
-def _simple_text_key(text: str) -> str:
-    cleaned = re.sub(r"[^\w\s]", " ", _normalize_text(text).lower())
-    return re.sub(r"\s+", " ", cleaned).strip()
-
-
-def _message_length_bucket(text: str) -> str:
-    words = _word_count(text)
-    if words <= 3:
-        return "tiny"
-    if words <= 12:
-        return "short"
-    if words <= 28:
-        return "medium"
-    return "long"
-
-
-def _is_greeting_turn(user_message: str) -> bool:
-    return _simple_text_key(user_message) in _GREETING_KEYS
-
-
-def _looks_like_helper_coaching_turn(text: str) -> bool:
-    return _matches_any(text, _HELPER_COACHING_PATTERNS)
-
-
-def _looks_like_guidance_request(text: str) -> bool:
-    return _matches_any(text, _GUIDANCE_PATTERNS)
-
-
-def _looks_like_emotional_message(
-    text: str,
-    risk_level: str,
-    detected_emotion: str | None = None,
-) -> bool:
-    normalized_detected_emotion = (detected_emotion or "").strip().lower()
-    if risk_level == MEDIUM:
-        return True
-    if normalized_detected_emotion in _EMOTIONAL_MESSAGE_KINDS:
-        return True
-    return _matches_any(text, _EMOTIONAL_SIGNAL_PATTERNS)
-
-
-def _is_low_value_turn(user_message: str) -> bool:
-    text = _normalize_text(user_message).lower()
-    return text in {"ok", "okay", "thanks", "thank you", "got it", "cool"}
-
-
-def _is_short_emotional_checkin(user_message: str) -> bool:
-    text = _normalize_text(user_message).lower()
-    words = _word_count(text)
-
-    if not text:
-        return True
-
-    if _looks_like_guidance_request(text):
-        return False
-
-    emotional_checkin_patterns = [
-        r"\bi feel\b",
-        r"\bi'm feeling\b",
-        r"\bi am feeling\b",
-        r"\bfeel really\b",
-        r"\bfeel kinda\b",
-        r"\bfeel so\b",
-        r"\banxious\b",
-        r"\bstressed\b",
-        r"\boverwhelmed\b",
-        r"\bsad\b",
-        r"\bempty\b",
-        r"\blonely\b",
-        r"\bworthless\b",
-        r"\bhopeless\b",
-        r"\bconfused\b",
-        r"\bnot okay\b",
-        r"\bnot doing well\b",
-        r"\brough day\b",
-        r"\bbad day\b",
-        r"\bjust tired\b",
-    ]
-
-    return words <= 18 and _matches_any(text, emotional_checkin_patterns)
-
-
-def _derive_message_shape(
-    mode: str,
-    user_message: str,
-    risk_level: str,
-    detected_emotion: str | None = None,
-) -> dict[str, Any]:
-    normalized_mode = _normalize_mode(mode)
-    text = _normalize_text(user_message).lower()
-    words = _word_count(text)
-    length_bucket = _message_length_bucket(text)
-
-    is_greeting = _is_greeting_turn(text)
-    is_low_value = _is_low_value_turn(text)
-    is_helper_coaching = normalized_mode == HELP_SOMEONE and (
-        _looks_like_helper_coaching_turn(text) or _looks_like_guidance_request(text)
-    )
-    is_emotional = _looks_like_emotional_message(
-        text=text,
-        risk_level=risk_level,
-        detected_emotion=detected_emotion,
-    )
-
-    if is_greeting:
-        return {
-            "message_kind": "greeting",
-            "reply_length": "short",
-            "user_message_length": length_bucket,
-            "ask_follow_up": True,
-            "bubble_strategy": "single",
-            "tone_hint": "light and natural",
-        }
-
-    if is_low_value:
-        return {
-            "message_kind": "low_risk_casual",
-            "reply_length": "short",
-            "user_message_length": length_bucket,
-            "ask_follow_up": False,
-            "bubble_strategy": "single",
-            "tone_hint": "brief and natural",
-        }
-
-    if is_helper_coaching:
-        message_kind = "helper_guidance"
-        if _contains_any(text, ["what should i say", "what can i say", "say to"]):
-            message_kind = "what_to_say"
-        elif _looks_like_guidance_request(text):
-            message_kind = "practical_support"
-
-        if words >= 34 or (words >= 22 and "?" in text and _looks_like_guidance_request(text)):
-            reply_length = "long"
-        else:
-            reply_length = "medium"
-
-        return {
-            "message_kind": message_kind,
-            "reply_length": reply_length,
-            "user_message_length": length_bucket,
-            "ask_follow_up": False if message_kind == "what_to_say" else True,
-            "bubble_strategy": "one_or_two",
-            "tone_hint": "practical and warm",
-        }
-
-    if is_emotional:
-        normalized_detected_emotion = (detected_emotion or "").strip().lower()
-        message_kind = (
-            normalized_detected_emotion
-            if normalized_detected_emotion in _EMOTIONAL_MESSAGE_KINDS
-            else "emotional"
-        )
-        reply_length = "short" if risk_level == LOW and _is_short_emotional_checkin(text) else "medium"
-        return {
-            "message_kind": message_kind,
-            "reply_length": reply_length,
-            "user_message_length": length_bucket,
-            "ask_follow_up": True,
-            "bubble_strategy": "one_or_two",
-            "tone_hint": "gentle and validating",
-        }
-
-    if risk_level == LOW and length_bucket in {"tiny", "short"}:
-        return {
-            "message_kind": "low_risk_casual",
-            "reply_length": "short",
-            "user_message_length": length_bucket,
-            "ask_follow_up": not is_low_value,
-            "bubble_strategy": "single",
-            "tone_hint": "light and companion-like",
-        }
-
-    return {
-        "message_kind": "casual" if risk_level == LOW else "emotional",
-        "reply_length": "medium" if risk_level == MEDIUM or length_bucket in {"medium", "long"} else "short",
-        "user_message_length": length_bucket,
-        "ask_follow_up": risk_level != LOW or length_bucket != "tiny",
-        "bubble_strategy": "one_or_two",
-        "tone_hint": "warm and natural",
-    }
-
-
 def _build_basic_support_plan(
     mode: str,
     user_message: str,
@@ -415,12 +128,6 @@ def _build_basic_support_plan(
     use_emoji = risk_level == LOW
 
     normalized_detected_emotion = (detected_emotion or "").strip().lower() or None
-    shape = _derive_message_shape(
-        mode=normalized_mode,
-        user_message=text,
-        risk_level=risk_level,
-        detected_emotion=normalized_detected_emotion,
-    )
 
     if normalized_mode == HELP_SOMEONE:
         primary_emotion = "concern"
@@ -518,13 +225,64 @@ def _build_basic_support_plan(
         "use_emoji": use_emoji,
         "detected_emotion": normalized_detected_emotion,
         "emotion_confidence": float(emotion_confidence or 0.0),
-        "message_kind": shape["message_kind"],
-        "reply_length": shape["reply_length"],
-        "user_message_length": shape["user_message_length"],
-        "ask_follow_up": shape["ask_follow_up"],
-        "bubble_strategy": shape["bubble_strategy"],
-        "tone_hint": shape["tone_hint"],
     }
+
+
+def _is_low_value_turn(user_message: str) -> bool:
+    text = _normalize_text(user_message).lower()
+    return text in {"ok", "okay", "thanks", "thank you", "got it", "cool"}
+
+
+def _is_short_emotional_checkin(user_message: str) -> bool:
+    text = _normalize_text(user_message).lower()
+    words = _word_count(text)
+
+    if not text:
+        return True
+
+    guidance_patterns = [
+        r"\bwhat should i do\b",
+        r"\bwhat can i do\b",
+        r"\bhow do i\b",
+        r"\bhow can i\b",
+        r"\bwhat should i say\b",
+        r"\bcan you help me\b",
+        r"\bany advice\b",
+        r"\bany tips\b",
+        r"\bhow to cope\b",
+        r"\bhow to calm down\b",
+        r"\bhow to handle\b",
+        r"\bhow to support\b",
+        r"\bwhat helps\b",
+        r"\bwhat would help\b",
+    ]
+    if _matches_any(text, guidance_patterns):
+        return False
+
+    emotional_checkin_patterns = [
+        r"\bi feel\b",
+        r"\bi'm feeling\b",
+        r"\bi am feeling\b",
+        r"\bfeel really\b",
+        r"\bfeel kinda\b",
+        r"\bfeel so\b",
+        r"\banxious\b",
+        r"\bstressed\b",
+        r"\boverwhelmed\b",
+        r"\bsad\b",
+        r"\bempty\b",
+        r"\blonely\b",
+        r"\bworthless\b",
+        r"\bhopeless\b",
+        r"\bconfused\b",
+        r"\bnot okay\b",
+        r"\bnot doing well\b",
+        r"\brough day\b",
+        r"\bbad day\b",
+        r"\bjust tired\b",
+    ]
+
+    return words <= 18 and _matches_any(text, emotional_checkin_patterns)
 
 
 def _should_use_rag(
@@ -800,7 +558,7 @@ def _strip_emoji(text: str) -> str:
     )
     cleaned = emoji_pattern.sub("", text or "")
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    cleaned = re.sub(r" ?\n ?", "\n", cleaned)
+    cleaned = re.sub(r" ?\n ?","\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 

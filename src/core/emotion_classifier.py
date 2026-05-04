@@ -41,14 +41,8 @@ class EmotionClassifier:
         logger.info("Loading emotion model from: %s", self.model_path)
         logger.info("Emotion classifier device: %s", self.device)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path,
-            local_files_only=True,
-        )
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_path,
-            local_files_only=True,
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_path)
         self.model.to(self.device)
         self.model.eval()
 
@@ -80,7 +74,7 @@ class EmotionClassifier:
             max_length=128,
             padding=True,
         )
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -130,20 +124,9 @@ class EmotionClassifier:
             return "unknown"
 
         normalized = str(label).strip().lower()
-        normalized = normalized.replace("-", "_").replace(" ", "_")
         normalized = normalized.replace("fear", "anxious")
         normalized = normalized.replace("anger", "angry")
 
-        aliases = {
-            "joy": "happy",
-            "happiness": "happy",
-            "neutral": "calm",
-            "sadness": "sad",
-            "confusion": "confused",
-            "stress": "stressed",
-        }
-
-        normalized = aliases.get(normalized, normalized)
         return normalized if normalized else "unknown"
 
 
