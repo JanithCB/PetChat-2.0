@@ -61,12 +61,21 @@ except ImportError:
     }}
     """
 
+
 _QT_MAX = 16777215
 _MIN_BUBBLE_WIDTH = 260
 _HARD_MAX_BUBBLE_WIDTH = max(CHAT_BUBBLE_MAX_WIDTH, 760)
 _ROW_SIDE_PADDING = max(CHAT_SIDE_PADDING, 24)
 _COMPOSER_MIN_HEIGHT = 52
 _COMPOSER_MAX_HEIGHT = 110
+
+_SHORT_FOLLOW_UP_MAX_CHARS = 120
+_SHORT_INVITE_MAX_CHARS = 140
+_HEAVY_BUBBLE_THRESHOLD = 260
+
+
+def _normalize_chunk_text(text: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", (text or "").strip())
 
 
 def _looks_like_emoji_or_tiny_tail(text: str) -> bool:
@@ -83,51 +92,118 @@ def _looks_like_emoji_or_tiny_tail(text: str) -> bool:
     return False
 
 
+def _is_short_question_line(text: str) -> bool:
+    cleaned = _normalize_chunk_text(text)
+    if not cleaned:
+        return False
+
+    if len(cleaned) > _SHORT_FOLLOW_UP_MAX_CHARS:
+        return False
+
+    if "?" in cleaned:
+        return True
+
+    lowered = cleaned.lower()
+    starters = (
+        "want to ",
+        "want me to ",
+        "do you want",
+        "would it help",
+        "would you like",
+        "can you tell me",
+        "what's been",
+        "whats been",
+        "how has",
+        "how's",
+        "hows",
+    )
+    return lowered.startswith(starters)
+
+
+def _is_short_invite_line(text: str) -> bool:
+    cleaned = _normalize_chunk_text(text)
+    if not cleaned:
+        return False
+
+    if len(cleaned) > _SHORT_INVITE_MAX_CHARS:
+        return False
+
+    lowered = cleaned.lower()
+    invite_patterns = [
+        r"^if you want[, ]",
+        r"^if you feel like[, ]",
+        r"^if it helps[, ]",
+        r"^you can tell me\b",
+        r"^you can talk to me\b",
+        r"^no pressure[, ]",
+        r"^whenever you're ready[, ]",
+        r"^whenever you are ready[, ]",
+        r"^when you're ready[, ]",
+        r"^when you are ready[, ]",
+    ]
+    return any(re.search(pattern, lowered) for pattern in invite_patterns)
+
+
+def _should_split_tail(first: str, tail: str) -> bool:
+    lead = _normalize_chunk_text(first)
+    end = _normalize_chunk_text(tail)
+
+    if not lead or not end:
+        return False
+
+    if _looks_like_emoji_or_tiny_tail(end):
+        return False
+
+    if not (_is_short_question_line(end) or _is_short_invite_line(end)):
+        return False
+
+    if len(end) > _SHORT_INVITE_MAX_CHARS:
+        return False
+
+    return len(lead) >= 60
+
+
 def split_reply_into_chunks(text: str, preferred_max_chunks: int = 2) -> list[str]:
-    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+    text = _normalize_chunk_text(text)
     if not text:
         return []
+
+    if preferred_max_chunks <= 1:
+        return [text]
 
     paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
     if len(paragraphs) <= 1:
         return [text]
 
-    if len(paragraphs) >= 3 and len(text) >= 520:
-        max_chunks = 3
-    else:
-        max_chunks = preferred_max_chunks
+    if len(paragraphs) == 2:
+        first, second = paragraphs
+        if _should_split_tail(first, second):
+            return [first, second]
+        return ["\n\n".join(paragraphs)]
 
-    chunks: list[str] = []
-    current = ""
+    lead = "\n\n".join(paragraphs[:-1]).strip()
+    tail = paragraphs[-1].strip()
 
-    for paragraph in paragraphs:
-        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+    if _should_split_tail(lead, tail):
+        return [lead, tail]
 
-        if not current:
-            current = paragraph
-            continue
+    merged = "\n\n".join(paragraphs).strip()
+    if len(merged) >= (_HEAVY_BUBBLE_THRESHOLD * 2):
+        halfway = max(1, len(paragraphs) // 2)
+        left = "\n\n".join(paragraphs[:halfway]).strip()
+        right = "\n\n".join(paragraphs[halfway:]).strip()
 
-        if len(chunks) + 1 >= max_chunks:
-            current = candidate
-            continue
+        if (
+            left
+            and right
+            and len(left) <= 420
+            and len(right) <= 420
+            and not _looks_like_emoji_or_tiny_tail(right)
+            and not (_is_short_question_line(right) or _is_short_invite_line(right))
+        ):
+            return [left, right]
 
-        if len(candidate) <= 320:
-            current = candidate
-        else:
-            chunks.append(current)
-            current = paragraph
-
-    if current:
-        chunks.append(current)
-
-    if len(chunks) > max_chunks:
-        chunks = chunks[: max_chunks - 1] + ["\n\n".join(chunks[max_chunks - 1 :]).strip()]
-
-    if len(chunks) >= 2 and _looks_like_emoji_or_tiny_tail(chunks[-1]):
-        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
-        chunks.pop()
-
-    return [chunk for chunk in chunks if chunk.strip()]
+    return [merged]
 
 
 class _MessageBubble(QWidget):
@@ -225,8 +301,8 @@ class ChatPage(QWidget):
     logout_requested = pyqtSignal()
     back_requested = pyqtSignal()
 
-    _FIRST_BUBBLE_DELAY_MS = 320
-    _NEXT_BUBBLE_DELAY_MS = 420
+    _FIRST_BUBBLE_DELAY_MS = 280
+    _NEXT_BUBBLE_DELAY_MS = 360
     _SCROLL_ANIMATION_MS = 260
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -726,7 +802,7 @@ class ChatPage(QWidget):
 
     @pyqtSlot(str)
     def _on_reply_ready(self, reply: str) -> None:
-        clean_reply = reply.strip() or "I am here with you."
+        clean_reply = reply.strip() or "Hey, I'm here."
 
         self._push_history("assistant", clean_reply, mode=self._active_worker_mode)
 
@@ -790,10 +866,14 @@ class ChatPage(QWidget):
             self._typing_bubble = None
 
     def _append_bubble(self, text: str, role: str, auto_scroll: bool = True) -> None:
+        content = _normalize_chunk_text(text)
+        if not content:
+            return
+
         if role != "typing":
             self._hide_typing()
 
-        bubble = _MessageBubble(text, role)
+        bubble = _MessageBubble(content, role)
         bubble.set_bubble_max_width(
             min(230, self._current_bubble_width()) if role == "typing" else self._current_bubble_width()
         )
@@ -811,7 +891,7 @@ class ChatPage(QWidget):
 
         for item in self._active_history():
             role = item.get("role", "assistant")
-            content = item.get("content", "").strip()
+            content = _normalize_chunk_text(item.get("content", ""))
 
             if not content:
                 continue
@@ -860,8 +940,12 @@ class ChatPage(QWidget):
     def _push_history(self, role: str, content: str, mode: str | None = None) -> None:
         target_mode = mode or self._mode
         history = self._mode_histories.setdefault(target_mode, [])
+        clean_content = _normalize_chunk_text(content)
 
-        history.append({"role": role, "content": content})
+        if not clean_content:
+            return
+
+        history.append({"role": role, "content": clean_content})
 
         max_messages = MAX_HISTORY_TURNS * 2
         if len(history) > max_messages:
