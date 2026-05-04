@@ -28,17 +28,19 @@ class C:
 
     WARM_SURFACE = "#12110D"
     WARM_SURFACE_ALT = "#17150F"
+    WARM_SURFACE_ELEVATED = "#1B1811"
     SOFT_BORDER = "#2B2619"
+    SOFT_BORDER_SOFT = "#201C12"
     SOFT_BORDER_HOVER = "#4A3D18"
     ACCENT_SOFT = "rgba(255, 204, 51, 0.12)"
     ACCENT_SOFT_QSS = "#2A2410"
+    CHAT_ASSISTANT_BORDER = "#2E291D"
+    CHAT_TYPING_BG = "#14120E"
+    CHAT_INPUT_BG = "#100F0B"
+    CHAT_INPUT_BORDER = "#2E291C"
+    SCROLLBAR = "#3A3425"
+    SCROLLBAR_HOVER = "#514723"
     SHADOW = QColor(0, 0, 0, 110)
-
-    USER_BUBBLE_HOVER = "#FFD95C"
-    BOT_BUBBLE_ALT = "#15140F"
-    BOT_BORDER = "#2A261C"
-    TYPING_BG = "#15130F"
-    ERROR_BG = "#1B1010"
 
 
 FONT_FAMILY = "Segoe UI"
@@ -49,16 +51,17 @@ FONT_SIZE_MD = 15
 FONT_SIZE_LG = 20
 FONT_SIZE_XL = 30
 
+
 CHAT_MAX_WIDTH = 1600
 CHAT_BUBBLE_MAX_WIDTH = 760
 CHAT_SIDE_PADDING = 20
 CHAT_TOP_PADDING = 18
 CHAT_BOTTOM_PADDING = 16
 
-BUBBLE_RADIUS = 14
+
+BUBBLE_RADIUS = 16
 BUBBLE_PADDING_Y = 10
 BUBBLE_PADDING_X = 14
-BUBBLE_LINE_HEIGHT = 1.42
 
 CARD_RADIUS = 18
 INPUT_RADIUS = 20
@@ -222,8 +225,8 @@ QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
 
 CHAT_INPUT_CONTAINER = f"""
 QFrame {{
-    background-color: #100F0B;
-    border: 1px solid #2E291C;
+    background-color: {C.CHAT_INPUT_BG};
+    border: 1px solid {C.CHAT_INPUT_BORDER};
     border-radius: {INPUT_RADIUS}px;
     padding: 4px;
 }}
@@ -274,7 +277,6 @@ QLabel {{
     color: {C.TEXT};
     font-size: {FONT_SIZE_XL}px;
     font-weight: 800;
-    letter-spacing: -0.5px;
 }}
 """
 
@@ -283,7 +285,6 @@ PAGE_SUBTITLE = f"""
 QLabel {{
     color: {C.MUTED};
     font-size: {FONT_SIZE_BASE}px;
-    line-height: 145%;
 }}
 """
 
@@ -312,31 +313,31 @@ USER_BUBBLE = f"""
 QLabel {{
     background-color: {C.USER_BUBBLE};
     color: {C.USER_TEXT};
-    border: none;
+    border: 1px solid transparent;
     border-radius: {BUBBLE_RADIUS}px;
     padding: {BUBBLE_PADDING_Y}px {BUBBLE_PADDING_X}px;
     font-size: {FONT_SIZE_BASE}px;
-    font-weight: 500;
-    line-height: {BUBBLE_LINE_HEIGHT};
+    font-weight: 600;
 }}
 """
 
+
 ASSISTANT_BUBBLE = f"""
 QLabel {{
-    background-color: {C.BOT_BUBBLE if C.BOT_BUBBLE else C.BOT_BUBBLE_ALT};
+    background-color: {C.BOT_BUBBLE};
     color: {C.BOT_TEXT};
-    border: 1px solid {C.BOT_BORDER};
+    border: 1px solid {C.CHAT_ASSISTANT_BORDER};
     border-radius: {BUBBLE_RADIUS}px;
     padding: {BUBBLE_PADDING_Y}px {BUBBLE_PADDING_X}px;
     font-size: {FONT_SIZE_BASE}px;
     font-weight: 450;
-    line-height: {BUBBLE_LINE_HEIGHT};
 }}
 """
 
+
 TYPING_INDICATOR_BUBBLE = f"""
 QLabel {{
-    background-color: {C.TYPING_BG};
+    background-color: {C.CHAT_TYPING_BG};
     color: {C.MUTED};
     border: 1px solid {C.SOFT_BORDER};
     border-radius: 14px;
@@ -346,9 +347,10 @@ QLabel {{
 }}
 """
 
+
 ERROR_BUBBLE = f"""
 QLabel {{
-    background-color: {C.ERROR_BG};
+    background-color: #1B1010;
     color: {C.DANGER};
     border: 1px solid {C.DANGER};
     border-radius: {BUBBLE_RADIUS}px;
@@ -365,12 +367,12 @@ QScrollBar:vertical {{
     margin: 6px 2px 6px 2px;
 }}
 QScrollBar::handle:vertical {{
-    background: #3A3425;
+    background: {C.SCROLLBAR};
     border-radius: 4px;
     min-height: 32px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: #514723;
+    background: {C.SCROLLBAR_HOVER};
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
@@ -546,6 +548,7 @@ def apply_app_style(app: QApplication) -> None:
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(C.TEXT))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(C.ACCENT))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(C.USER_TEXT))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(C.MUTED))
     app.setPalette(palette)
     app.setStyleSheet(_GLOBAL_QSS)
 

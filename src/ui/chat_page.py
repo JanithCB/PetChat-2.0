@@ -69,13 +69,17 @@ _ROW_SIDE_PADDING = max(CHAT_SIDE_PADDING, 24)
 _COMPOSER_MIN_HEIGHT = 52
 _COMPOSER_MAX_HEIGHT = 110
 
-_SHORT_FOLLOW_UP_MAX_CHARS = 120
-_SHORT_INVITE_MAX_CHARS = 140
-_HEAVY_BUBBLE_THRESHOLD = 260
-
 
 def _normalize_chunk_text(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+
+
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", text or ""))
+
+
+def _sentence_count(text: str) -> int:
+    return len(re.findall(r"[.!?]", text or ""))
 
 
 def _looks_like_emoji_or_tiny_tail(text: str) -> bool:
@@ -92,75 +96,58 @@ def _looks_like_emoji_or_tiny_tail(text: str) -> bool:
     return False
 
 
-def _is_short_question_line(text: str) -> bool:
-    cleaned = _normalize_chunk_text(text)
+def _is_light_follow_up_question(text: str) -> bool:
+    cleaned = text.strip()
     if not cleaned:
         return False
 
-    if len(cleaned) > _SHORT_FOLLOW_UP_MAX_CHARS:
-        return False
-
-    if "?" in cleaned:
-        return True
-
     lowered = cleaned.lower()
-    starters = (
-        "want to ",
-        "want me to ",
-        "do you want",
-        "would it help",
-        "would you like",
-        "can you tell me",
-        "what's been",
-        "whats been",
-        "how has",
-        "how's",
-        "hows",
-    )
-    return lowered.startswith(starters)
-
-
-def _is_short_invite_line(text: str) -> bool:
-    cleaned = _normalize_chunk_text(text)
-    if not cleaned:
+    if not cleaned.endswith("?"):
+        return False
+    if cleaned.count("?") > 1:
+        return False
+    if len(cleaned) > 110:
+        return False
+    if _word_count(cleaned) > 18:
+        return False
+    if _sentence_count(cleaned) > 2:
+        return False
+    if lowered.startswith(("also ", "and ", "but ", "so ", "plus ")):
         return False
 
-    if len(cleaned) > _SHORT_INVITE_MAX_CHARS:
-        return False
-
-    lowered = cleaned.lower()
-    invite_patterns = [
-        r"^if you want[, ]",
-        r"^if you feel like[, ]",
-        r"^if it helps[, ]",
-        r"^you can tell me\b",
-        r"^you can talk to me\b",
-        r"^no pressure[, ]",
-        r"^whenever you're ready[, ]",
-        r"^whenever you are ready[, ]",
-        r"^when you're ready[, ]",
-        r"^when you are ready[, ]",
-    ]
-    return any(re.search(pattern, lowered) for pattern in invite_patterns)
+    return True
 
 
-def _should_split_tail(first: str, tail: str) -> bool:
-    lead = _normalize_chunk_text(first)
-    end = _normalize_chunk_text(tail)
+def _best_two_chunk_split(paragraphs: list[str]) -> list[str]:
+    if len(paragraphs) <= 1:
+        return ["\n\n".join(paragraphs).strip()] if paragraphs else []
 
-    if not lead or not end:
-        return False
+    full_text = "\n\n".join(paragraphs).strip()
+    if not full_text:
+        return []
 
-    if _looks_like_emoji_or_tiny_tail(end):
-        return False
+    target = max(260, len(full_text) // 2)
+    best_index: int | None = None
+    best_score: int | None = None
 
-    if not (_is_short_question_line(end) or _is_short_invite_line(end)):
-        return False
+    for index in range(1, len(paragraphs)):
+        first = "\n\n".join(paragraphs[:index]).strip()
+        second = "\n\n".join(paragraphs[index:]).strip()
 
-    if len(end) > _SHORT_INVITE_MAX_CHARS:
-        return False
+        if len(first) < 170 or len(second) < 110:
+            continue
 
-    return len(lead) >= 60
+        score = abs(len(first) - target) + abs(len(second) - target)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_index = index
+
+    if best_index is None:
+        return [full_text]
+
+    first = "\n\n".join(paragraphs[:best_index]).strip()
+    second = "\n\n".join(paragraphs[best_index:]).strip()
+    return [chunk for chunk in [first, second] if chunk]
 
 
 def split_reply_into_chunks(text: str, preferred_max_chunks: int = 2) -> list[str]:
@@ -168,42 +155,41 @@ def split_reply_into_chunks(text: str, preferred_max_chunks: int = 2) -> list[st
     if not text:
         return []
 
-    if preferred_max_chunks <= 1:
-        return [text]
-
     paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
     if len(paragraphs) <= 1:
         return [text]
 
-    if len(paragraphs) == 2:
-        first, second = paragraphs
-        if _should_split_tail(first, second):
-            return [first, second]
-        return ["\n\n".join(paragraphs)]
+    if preferred_max_chunks <= 1:
+        return [text]
 
-    lead = "\n\n".join(paragraphs[:-1]).strip()
+    if len(text) <= 220:
+        return [text]
+
+    body = "\n\n".join(paragraphs[:-1]).strip()
     tail = paragraphs[-1].strip()
 
-    if _should_split_tail(lead, tail):
-        return [lead, tail]
+    if body and _is_light_follow_up_question(tail) and len(body) <= 430:
+        return [body, tail]
 
-    merged = "\n\n".join(paragraphs).strip()
-    if len(merged) >= (_HEAVY_BUBBLE_THRESHOLD * 2):
-        halfway = max(1, len(paragraphs) // 2)
-        left = "\n\n".join(paragraphs[:halfway]).strip()
-        right = "\n\n".join(paragraphs[halfway:]).strip()
+    if len(paragraphs) == 2:
+        first, second = paragraphs
+        if _looks_like_emoji_or_tiny_tail(second):
+            return [text]
+        if _is_light_follow_up_question(second):
+            return [first, second]
+        if len(text) >= 520 and len(first) >= 300 and 45 <= len(second) <= 190:
+            return [first, second]
+        return [text]
 
-        if (
-            left
-            and right
-            and len(left) <= 420
-            and len(right) <= 420
-            and not _looks_like_emoji_or_tiny_tail(right)
-            and not (_is_short_question_line(right) or _is_short_invite_line(right))
-        ):
-            return [left, right]
+    if len(text) < 580:
+        return [text]
 
-    return [merged]
+    chunks = _best_two_chunk_split(paragraphs)
+    if len(chunks) >= 2 and _looks_like_emoji_or_tiny_tail(chunks[-1]):
+        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
+        chunks.pop()
+
+    return chunks[:2] if chunks else [text]
 
 
 class _MessageBubble(QWidget):
@@ -301,8 +287,8 @@ class ChatPage(QWidget):
     logout_requested = pyqtSignal()
     back_requested = pyqtSignal()
 
-    _FIRST_BUBBLE_DELAY_MS = 280
-    _NEXT_BUBBLE_DELAY_MS = 360
+    _FIRST_BUBBLE_DELAY_MS = 320
+    _NEXT_BUBBLE_DELAY_MS = 420
     _SCROLL_ANIMATION_MS = 260
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -640,6 +626,14 @@ class ChatPage(QWidget):
             else:
                 bubble.set_bubble_max_width(bubble_width)
 
+    def _current_placeholder(self) -> str:
+        if self._mode == MODE_HELP_SOMEONE:
+            return "Type how you want to help"
+        return "Type a message"
+
+    def _refresh_input_placeholder(self) -> None:
+        self._input.setPlaceholderText(self._current_placeholder())
+
     def start_session(
         self,
         user_name: str,
@@ -670,6 +664,7 @@ class ChatPage(QWidget):
         self._pending_chunks = []
         self._clear_conversation()
         self._set_mode_buttons()
+        self._refresh_input_placeholder()
         self._session_label.setText(self._session_summary())
         self._status_label.clear()
         self._set_input_enabled(True)
@@ -695,6 +690,7 @@ class ChatPage(QWidget):
         self._pending_chunks = []
         self._clear_conversation()
         self._set_mode_buttons()
+        self._refresh_input_placeholder()
         self._session_label.clear()
         self._status_label.clear()
         self._input.clear()
@@ -734,6 +730,7 @@ class ChatPage(QWidget):
             self._mode = MODE_HELP_SOMEONE
 
         self._status_label.clear()
+        self._refresh_input_placeholder()
         self._set_mode_buttons()
         self._render_active_history()
         QTimer.singleShot(40, self._scroll_to_bottom)
@@ -802,7 +799,7 @@ class ChatPage(QWidget):
 
     @pyqtSlot(str)
     def _on_reply_ready(self, reply: str) -> None:
-        clean_reply = reply.strip() or "Hey, I'm here."
+        clean_reply = reply.strip() or "I am here with you."
 
         self._push_history("assistant", clean_reply, mode=self._active_worker_mode)
 
@@ -866,14 +863,10 @@ class ChatPage(QWidget):
             self._typing_bubble = None
 
     def _append_bubble(self, text: str, role: str, auto_scroll: bool = True) -> None:
-        content = _normalize_chunk_text(text)
-        if not content:
-            return
-
         if role != "typing":
             self._hide_typing()
 
-        bubble = _MessageBubble(content, role)
+        bubble = _MessageBubble(text, role)
         bubble.set_bubble_max_width(
             min(230, self._current_bubble_width()) if role == "typing" else self._current_bubble_width()
         )
@@ -891,7 +884,7 @@ class ChatPage(QWidget):
 
         for item in self._active_history():
             role = item.get("role", "assistant")
-            content = _normalize_chunk_text(item.get("content", ""))
+            content = item.get("content", "").strip()
 
             if not content:
                 continue
@@ -940,12 +933,8 @@ class ChatPage(QWidget):
     def _push_history(self, role: str, content: str, mode: str | None = None) -> None:
         target_mode = mode or self._mode
         history = self._mode_histories.setdefault(target_mode, [])
-        clean_content = _normalize_chunk_text(content)
 
-        if not clean_content:
-            return
-
-        history.append({"role": role, "content": clean_content})
+        history.append({"role": role, "content": content})
 
         max_messages = MAX_HISTORY_TURNS * 2
         if len(history) > max_messages:
